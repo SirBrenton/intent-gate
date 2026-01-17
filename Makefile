@@ -1,15 +1,19 @@
 PY := .venv/bin/python
+PIP := .venv/bin/pip
 INTENT_GATE := ./src/intent_gate.py
 IR_TOOL := ./src/ir_tool.py
 SANDBOX := sandbox
 
-.PHONY: help venv deps test demo clean
+.PHONY: help venv deps fmt lint test check demo clean
 
 help:
 	@echo "Targets:"
 	@echo "  make venv   - create venv"
 	@echo "  make deps   - install deps"
+	@echo "  make fmt    - format (placeholder until ruff/black added)"
+	@echo "  make lint   - lint (placeholder until ruff added)"
 	@echo "  make test   - run pytest"
+	@echo "  make check  - fmt + lint + test"
 	@echo "  make demo   - run the canonical intent-gate demo"
 	@echo "  make clean  - remove sandbox contents + __pycache__"
 
@@ -17,8 +21,18 @@ venv:
 	python3 -m venv .venv
 
 deps:
-	.venv/bin/pip install -U pip
-	.venv/bin/pip install pyyaml python-dateutil pytest
+	$(PIP) install -U pip
+	$(PIP) install pyyaml python-dateutil pytest
+
+# --- Quality gates (add tools later) ---
+fmt:
+	@echo "TODO: add formatter (ruff/black)."
+
+lint:
+	@echo "TODO: add linter (ruff)."
+
+check: fmt lint test
+# -------------------------------------
 
 test:
 	.venv/bin/pytest -q
