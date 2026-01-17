@@ -54,22 +54,89 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 
 def _parse_intent_record_md(path: Path) -> Dict[str, Any]:
     """
-    V1 parser for Intent Record markdown created by this repo.
+    Parse an Intent Record.
 
-    Expected keys (minimal):
-      Scope.root
-      Scope.expires
-      Allowed action classes (list)
-      Constraints.max_files
-      Constraints.deny_globs (list)
-      Signature.signature (non-empty)
+    Supports BOTH:
+      A) YAML front-matter IR (preferred, emitted by ir_tool.py)
+      B) Legacy markdown-heading IR (used in older tests)
 
-    Format is "human readable" but structured with headings + key/value lines.
+    Normalized output shape (what decide() expects):
+      {
+        "scope": {"root": str, "expires": str},
+        "constraints": {"max_files": int|None, "deny_globs": [..]},
+        "allowed_action_classes": [..],
+        "signature": str,
+        "raw_text": str,
+      }
     """
     if not path.exists():
         raise FileNotFoundError(f"Missing intent record: {path}")
     text = path.read_text(encoding="utf-8")
 
+    # ---- A) YAML front-matter path ----
+    if text.lstrip().startswith("---"):
+        # Extract first YAML document bounded by --- ... ---
+        lines = text.splitlines()
+        if lines and lines[0].strip() == "---":
+            end_idx = None
+            for i in range(1, len(lines)):
+                if lines[i].strip() == "---":
+                    end_idx = i
+                    break
+            if end_idx is None:
+                raise ValueError("Intent Record YAML front matter is missing closing '---'")
+
+            fm_text = "\n".join(lines[1:end_idx])
+            fm = yaml.safe_load(fm_text) or {}
+
+            scope = fm.get("scope") or {}
+            constraints = fm.get("constraints") or {}
+
+            def _as_str(x: Any) -> str:
+                # yaml.safe_load may return non-strings (e.g., datetime); normalize safely.
+                if x is None:
+                    return ""
+                return str(x).strip()
+
+            # allow root either in scope.root or legacy top-level root
+            root = _as_str(scope.get("root") or fm.get("root"))
+
+            # prefer expires_utc; accept scope.expires / expires too (string or datetime)
+            expires = _as_str(fm.get("expires_utc") or scope.get("expires") or fm.get("expires"))
+
+            # accept actions_allowed (preferred), fallback to actions
+            actions = fm.get("actions_allowed")
+            if actions is None:
+                actions = fm.get("actions")
+            if actions is None:
+                actions = []
+            if isinstance(actions, str):
+                actions = [actions]
+
+            signature = _as_str(fm.get("signature")).strip('"').strip("'")
+
+            deny_globs = constraints.get("deny_globs") or fm.get("deny_globs") or []
+            if isinstance(deny_globs, str):
+                deny_globs = [deny_globs]
+
+            max_files = constraints.get("max_files")
+            if max_files is None:
+                max_files = fm.get("max_files")
+
+            try:
+                max_files = int(max_files) if max_files is not None else None
+            except Exception:
+                max_files = None
+
+            return {
+                "scope": {"root": root, "expires": expires},
+                "constraints": {"max_files": max_files, "deny_globs": list(deny_globs)},
+                "allowed_action_classes": list(actions),
+                "signature": signature,
+                "raw_text": text,
+            }
+
+    # ---- B) Legacy markdown-heading path ----
     def find_line(prefix: str) -> Optional[str]:
         for line in text.splitlines():
             if line.strip().startswith(prefix):
@@ -77,7 +144,6 @@ def _parse_intent_record_md(path: Path) -> Dict[str, Any]:
         return None
 
     def find_list_after(header: str) -> List[str]:
-        # Finds bullets under a "## Header" line
         lines = text.splitlines()
         out: List[str] = []
         in_block = False
@@ -99,20 +165,13 @@ def _parse_intent_record_md(path: Path) -> Dict[str, Any]:
     signature = find_line("signature")
 
     deny_globs = find_list_after("Constraints")
-    # If Constraints contains multiple keys, deny_globs will include them; filter
     deny_globs = [g for g in deny_globs if "*" in g or "?" in g or "/" in g or "." in g]
 
     allowed_actions = find_list_after("Allowed action classes")
 
     return {
-        "scope": {
-            "root": root,
-            "expires": expires,
-        },
-        "constraints": {
-            "max_files": int(max_files) if max_files else None,
-            "deny_globs": deny_globs,
-        },
+        "scope": {"root": root, "expires": expires},
+        "constraints": {"max_files": int(max_files) if max_files else None, "deny_globs": deny_globs},
         "allowed_action_classes": allowed_actions,
         "signature": signature,
         "raw_text": text,
@@ -275,18 +334,15 @@ def decide(
         if touched > max_files:
             return GateDecision(False, f"DENY: command touches too many files (est={touched} > max={max_files}).", normalized, files_touched=touched)
 
-        # Enforce deny_globs against provided args
+        # Prevent "double-sandbox" mistakes: since we execute with cwd=sandbox_root,
+        # paths should be relative to sandbox_root (e.g., "foo.txt", not "sandbox/foo.txt").
         for a in cmd[1:]:
             if a.startswith("-"):
                 continue
-            # Normalize to relative-from-root if possible
-            p = (sandbox_root / a).resolve()
-            try:
-                rel = p.relative_to(sandbox_root.resolve()).as_posix()
-            except Exception:
-                rel = p.as_posix()
-            if _match_any_glob(rel, deny_globs_list):
-                return GateDecision(False, f"DENY: argument '{a}' matches deny_glob.", normalized, files_touched=touched)
+            if os.path.isabs(a):
+                return GateDecision(False, "DENY: absolute paths are not allowed (must be relative to sandbox root).", normalized, files_touched=touched)
+            if a.replace("\\", "/").startswith("sandbox/"):
+                return GateDecision(False, "DENY: do not prefix paths with 'sandbox/' (cwd is already sandbox root). Use relative paths.", normalized, files_touched=touched)
 
         return GateDecision(True, "ALLOW: Intent Record validated for mutating command.", normalized, files_touched=touched)
 
