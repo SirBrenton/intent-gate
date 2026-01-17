@@ -112,9 +112,10 @@ make test
 make demo
 ```
 make demo runs three scenarios:
-	1.	DENY: rm without an Intent Record
-	2.	ALLOW (dry-run): rm with a valid Intent Record
-	3.	ALLOW (execute): actually deletes the file inside the sandbox
+
+1. **DENY** — `rm` without an Intent Record  
+2. **ALLOW (dry-run)** — `rm` with a valid Intent Record  
+3. **ALLOW (execute)** — actually deletes the file inside the sandbox
 
 ---
 
