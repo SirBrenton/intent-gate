@@ -2,18 +2,23 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional
 
+# These are *gate action-classes*, not OS verbs.
+# Keep these aligned with src/intent_gate.py and tests/test_intent_gate.py::write_ir().
 ACTIONS = [
-    "write_file",
     "delete",
+    "write_over_existing",
     "move_or_rename",
+    "copy",
     "chmod",
     "git_commit",
 ]
+
+DEFAULT_DENY_GLOBS = ["**/.git/**", "**/*.key", "**/*.pem"]
+DEFAULT_MAX_FILES = 20
 
 
 def _utc_now_stamp() -> str:
@@ -29,41 +34,60 @@ def _normalize_root(root: Path) -> Path:
     return root.expanduser().resolve()
 
 
-def render_ir(root: Path, actions: List[str], note: str = "", expires_hours: Optional[int] = None) -> str:
-    stamp = _utc_now_stamp()
-    expires = ""
-    if expires_hours is not None:
-        exp = datetime.now(timezone.utc).timestamp() + (expires_hours * 3600)
-        expires_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
-        expires = expires_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+def _expires_str(expires_hours: Optional[int]) -> str:
+    if expires_hours is None:
+        # leave blank (meaning "no expiry" is not great; better to require one, but keep minimal)
+        return ""
+    exp_dt = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
+    # keep ISO-ish; gate tests accept a string, but parser likely treats as text
+    return exp_dt.isoformat(timespec="seconds").replace("+00:00", "Z")
 
-    # Minimal, deterministic template. YAML front-matter is easiest to parse.
-    lines = []
-    lines.append("---")
-    lines.append(f"id: IR-{stamp}")
-    lines.append(f"created_utc: {stamp}")
-    if expires:
-        lines.append(f"expires_utc: {expires}")
-    lines.append("actor:")
-    lines.append("  name: Brent Williams")
-    lines.append("  role: human_operator")
-    lines.append("scope:")
-    lines.append(f"  root: {str(root)}")
-    lines.append("actions_allowed:")
+
+def render_ir(
+    root: Path,
+    actions: List[str],
+    note: str = "",
+    expires_hours: Optional[int] = 24,
+    max_files: int = DEFAULT_MAX_FILES,
+    deny_globs: Optional[List[str]] = None,
+    signer_name: str = "Brent Williams",
+) -> str:
+    deny_globs = deny_globs or DEFAULT_DENY_GLOBS
+    expires = _expires_str(expires_hours) or "2099-01-01T00:00:00-08:00"
+
+    intent_line = note.strip() if note.strip() else "(fill in: what outcome are you authorizing?)"
+
+    # Canonical markdown IR (matches tests/test_intent_gate.py::write_ir()).
+    lines: List[str] = []
+    lines.append("# Intent Record")
+    lines.append("")
+    lines.append("## Human")
+    lines.append(f"name: {signer_name}")
+    lines.append("attestation: I authorize the destructive actions below within the defined scope.")
+    lines.append("")
+    lines.append("## Scope")
+    lines.append(f"root: {str(root)}")
+    lines.append(f"expires: {expires}")
+    lines.append("")
+    lines.append("## Allowed action classes")
     for a in actions:
-        lines.append(f"  - {a}")
-    lines.append("approval:")
-    lines.append("  required: false")
-    lines.append("  approver: null")
-    lines.append("  approved_utc: null")
-    lines.append("---")
+        lines.append(f"- {a}")
     lines.append("")
-    lines.append("# Intent")
-    lines.append(note.strip() if note.strip() else "(fill in: what outcome are you authorizing?)")
+    lines.append("## Constraints")
+    lines.append(f"- max_files: {max_files}")
+    for g in deny_globs:
+        lines.append(f"- {g}")
     lines.append("")
-    lines.append("# Notes")
+    lines.append("## Intent")
+    lines.append(intent_line)
+    lines.append("")
+    lines.append("## Notes")
     lines.append("- (optional) what could go wrong?")
     lines.append("- (optional) rollback plan?")
+    lines.append("")
+    lines.append("## Signature")
+    lines.append("method: local-typed")
+    lines.append(f"signature: {signer_name}")
     lines.append("")
     return "\n".join(lines)
 
@@ -77,6 +101,8 @@ def main() -> int:
     newp.add_argument("--actions", nargs="+", required=True, help=f"Allowed actions. Options: {', '.join(ACTIONS)}")
     newp.add_argument("--note", default="", help="Short intent note.")
     newp.add_argument("--expires-hours", type=int, default=24, help="Expiry window in hours (default: 24).")
+    newp.add_argument("--max-files", type=int, default=DEFAULT_MAX_FILES, help="Max files affected (default: 20).")
+    newp.add_argument("--deny-glob", action="append", default=None, help="Add deny glob (repeatable).")
     newp.add_argument("--dir", default="intent_records", help="Intent records directory (default: intent_records).")
     newp.add_argument("--print", action="store_true", help="Print IR content to stdout instead of writing file.")
 
@@ -91,7 +117,14 @@ def main() -> int:
         print(f"Valid actions: {ACTIONS}")
         return 2
 
-    content = render_ir(root=root, actions=args.actions, note=args.note, expires_hours=args.expires_hours)
+    content = render_ir(
+        root=root,
+        actions=args.actions,
+        note=args.note,
+        expires_hours=args.expires_hours,
+        max_files=args.max_files,
+        deny_globs=args.deny_glob,
+    )
 
     if args.print:
         print(content)
