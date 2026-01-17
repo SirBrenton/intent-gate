@@ -7,6 +7,7 @@ A minimal "refusal boundary" for agentic execution:
 - Allowlist for read-only commands.
 - Require a signed Intent Record for destructive/mutating commands.
 - Enforce scope root, expiry, deny_globs, max_files.
+- Forbid absolute paths and "double-sandbox" path mistakes.
 
 This is not a sandbox. It's an execution gate + audit trail.
 """
@@ -269,44 +270,87 @@ def decide(
             return GateDecision(False, f"DENY: read-only command '{cmd0}' not allowed by policy.", normalized)
         return GateDecision(True, "ALLOW: read-only command permitted by policy.", normalized)
 
-    # Mutating commands require intent
+    # Mutating commands require intent (as listed in policy)
+    if action_class == "mutating" and cmd0 not in requires_intent:
+        # Conservative: command is mutating but not explicitly supported.
+        return GateDecision(False, f"DENY: mutating command '{cmd0}' not explicitly supported.", normalized)
+
     if cmd0 in requires_intent:
         if intent is None:
             return GateDecision(False, f"DENY: '{cmd0}' requires an Intent Record.", normalized)
 
+        # Estimate touched files early (used by multiple deny paths)
+        touched = _estimate_files_touched(cmd, sandbox_root)
+
+        # Deny dangerous targets (regardless of IR)
+        dangerous = {".", "..", "/", "~"}
+        for a in cmd[1:]:
+            if a.startswith("-"):
+                continue
+            if a in dangerous:
+                return GateDecision(
+                    False,
+                    f"DENY: dangerous target '{a}' not allowed.",
+                    normalized,
+                    files_touched=touched,
+                )
+
+        # Prevent "double-sandbox" mistakes + forbid abs paths
+        # Since we execute with cwd=sandbox_root, paths should be relative to sandbox_root.
+        for a in cmd[1:]:
+            if a.startswith("-"):
+                continue
+            if os.path.isabs(a):
+                return GateDecision(
+                    False,
+                    "DENY: absolute paths are not allowed (must be relative to sandbox root).",
+                    normalized,
+                    files_touched=touched,
+                )
+            if a.replace("\\", "/").startswith("sandbox/"):
+                return GateDecision(
+                    False,
+                    "DENY: do not prefix paths with 'sandbox/' (cwd is already sandbox root). Use relative paths.",
+                    normalized,
+                    files_touched=touched,
+                )
+
         # Validate intent basics
         sig = (intent.get("signature") or "").strip()
         if not sig:
-            return GateDecision(False, "DENY: Intent Record missing signature.", normalized)
+            return GateDecision(False, "DENY: Intent Record missing signature.", normalized, files_touched=touched)
 
         scope = intent.get("scope") or {}
         root = (scope.get("root") or "").strip()
         expires = (scope.get("expires") or "").strip()
         if not root or not expires:
-            return GateDecision(False, "DENY: Intent Record missing scope.root or scope.expires.", normalized)
+            return GateDecision(False, "DENY: Intent Record missing scope.root or scope.expires.", normalized, files_touched=touched)
 
         # Root must match sandbox_root exactly (v1: strict)
         try:
             ir_root = Path(root).expanduser().resolve()
         except Exception:
-            return GateDecision(False, "DENY: Intent Record scope.root is invalid.", normalized)
+            return GateDecision(False, "DENY: Intent Record scope.root is invalid.", normalized, files_touched=touched)
 
         if ir_root != sandbox_root.resolve():
-            return GateDecision(False, f"DENY: scope.root mismatch (IR={ir_root} != sandbox={sandbox_root.resolve()}).", normalized)
+            return GateDecision(
+                False,
+                f"DENY: scope.root mismatch (IR={ir_root} != sandbox={sandbox_root.resolve()}).",
+                normalized,
+                files_touched=touched,
+            )
 
         # Expiry check
         try:
             exp = _parse_dt(expires)
         except Exception:
-            return GateDecision(False, "DENY: Intent Record expires is not parseable datetime.", normalized)
+            return GateDecision(False, "DENY: Intent Record expires is not parseable datetime.", normalized, files_touched=touched)
 
         if _now_utc() > exp:
-            return GateDecision(False, "DENY: Intent Record is expired.", normalized)
+            return GateDecision(False, "DENY: Intent Record is expired.", normalized, files_touched=touched)
 
         # Action class allowlist
         allowed_classes = set(intent.get("allowed_action_classes") or [])
-        # V1 naming: mutating commands map to these
-        # rm => delete, mv => move_or_rename, cp => copy, sed/truncate => write_over_existing
         cmd_to_needed = {
             "rm": "delete",
             "mv": "move_or_rename",
@@ -316,15 +360,19 @@ def decide(
         }
         needed = cmd_to_needed.get(cmd0, "mutate")
         if needed not in allowed_classes:
-            return GateDecision(False, f"DENY: Intent Record does not allow action '{needed}'.", normalized)
+            return GateDecision(
+                False,
+                f"DENY: Intent Record does not allow action '{needed}'.",
+                normalized,
+                files_touched=touched,
+            )
 
         # Deny globs (intent overrides default by union)
         deny_globs = set(deny_default)
         deny_globs.update(intent.get("constraints", {}).get("deny_globs") or [])
         deny_globs_list = sorted(deny_globs)
 
-        # Estimate touched files and enforce max_files
-        touched = _estimate_files_touched(cmd, sandbox_root)
+        # Enforce max_files
         max_files = intent.get("constraints", {}).get("max_files") or max_files_default
         try:
             max_files = int(max_files)
@@ -332,22 +380,34 @@ def decide(
             max_files = max_files_default
 
         if touched > max_files:
-            return GateDecision(False, f"DENY: command touches too many files (est={touched} > max={max_files}).", normalized, files_touched=touched)
+            return GateDecision(
+                False,
+                f"DENY: command touches too many files (est={touched} > max={max_files}).",
+                normalized,
+                files_touched=touched,
+            )
 
-        # Prevent "double-sandbox" mistakes: since we execute with cwd=sandbox_root,
-        # paths should be relative to sandbox_root (e.g., "foo.txt", not "sandbox/foo.txt").
+        # Enforce deny_globs against provided args (relative to sandbox_root when possible)
         for a in cmd[1:]:
             if a.startswith("-"):
                 continue
-            if os.path.isabs(a):
-                return GateDecision(False, "DENY: absolute paths are not allowed (must be relative to sandbox root).", normalized, files_touched=touched)
-            if a.replace("\\", "/").startswith("sandbox/"):
-                return GateDecision(False, "DENY: do not prefix paths with 'sandbox/' (cwd is already sandbox root). Use relative paths.", normalized, files_touched=touched)
+            p = (sandbox_root / a).resolve()
+            try:
+                rel = p.relative_to(sandbox_root.resolve()).as_posix()
+            except Exception:
+                rel = p.as_posix()
+            if _match_any_glob(rel, deny_globs_list):
+                return GateDecision(
+                    False,
+                    f"DENY: argument '{a}' matches deny_glob.",
+                    normalized,
+                    files_touched=touched,
+                )
 
         return GateDecision(True, "ALLOW: Intent Record validated for mutating command.", normalized, files_touched=touched)
 
-    # If it’s mutating but not listed, deny (conservative)
-    return GateDecision(False, f"DENY: mutating command '{cmd0}' not explicitly supported.", normalized)
+    # If we ever reach here, deny conservatively
+    return GateDecision(False, f"DENY: command '{cmd0}' not allowed by policy.", normalized)
 
 
 def run_command(cmd: List[str], cwd: Path) -> Tuple[int, str, str]:
