@@ -1,0 +1,21 @@
+version: 0.1
+
+read_only_commands:
+  - ls
+  - cat
+  - grep
+  - find
+
+requires_intent_commands:
+  - rm
+  - mv
+  - cp
+  - sed
+  - truncate
+
+deny_globs_default:
+  - "**/.git/**"
+  - "**/*.key"
+  - "**/*.pem"
+
+max_files_default: 50
