@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import os
 import re
 import shlex
@@ -45,6 +46,26 @@ class GateDecision:
 # -----------------------------
 # Helpers
 # -----------------------------
+
+def _iso_utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _append_audit(audit_path: Path, event: Dict[str, Any]) -> None:
+    """
+    Append a single JSON event to audit log (JSONL).
+    Best-effort: never block the command flow if logging fails.
+    """
+    try:
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = dict(event)
+        payload.setdefault("ts_utc", _iso_utc_now())
+        with audit_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, sort_keys=True) + "\n")
+    except Exception:
+        # Best-effort: do not fail closed on audit write in v1.
+        pass
+
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
     if not path.exists():
@@ -76,7 +97,6 @@ def _parse_intent_record_md(path: Path) -> Dict[str, Any]:
 
     # ---- A) YAML front-matter path ----
     if text.lstrip().startswith("---"):
-        # Extract first YAML document bounded by --- ... ---
         lines = text.splitlines()
         if lines and lines[0].strip() == "---":
             end_idx = None
@@ -99,13 +119,9 @@ def _parse_intent_record_md(path: Path) -> Dict[str, Any]:
                     return ""
                 return str(x).strip()
 
-            # allow root either in scope.root or legacy top-level root
             root = _as_str(scope.get("root") or fm.get("root"))
-
-            # prefer expires_utc; accept scope.expires / expires too (string or datetime)
             expires = _as_str(fm.get("expires_utc") or scope.get("expires") or fm.get("expires"))
 
-            # accept actions_allowed (preferred), fallback to actions
             actions = fm.get("actions_allowed")
             if actions is None:
                 actions = fm.get("actions")
@@ -146,7 +162,7 @@ def _parse_intent_record_md(path: Path) -> Dict[str, Any]:
 
     def find_list_after(header: str) -> List[str]:
         lines = text.splitlines()
-        out: List[str] = []
+        out: List[str] = [] 
         in_block = False
         for line in lines:
             if re.match(rf"^\s*##\s+{re.escape(header)}\s*$", line):
@@ -184,7 +200,6 @@ def _now_utc() -> datetime:
 
 
 def _parse_dt(dt_str: str) -> datetime:
-    # Accept ISO strings with timezone; default to UTC if missing
     dt = dtparser.parse(dt_str)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -192,7 +207,6 @@ def _parse_dt(dt_str: str) -> datetime:
 
 
 def _match_any_glob(path_str: str, globs: List[str]) -> bool:
-    # Match against normalized POSIX-ish string
     s = path_str.replace("\\", "/")
     for g in globs:
         gg = g.replace("\\", "/")
@@ -201,13 +215,9 @@ def _match_any_glob(path_str: str, globs: List[str]) -> bool:
     return False
 
 
-def _classify_command(cmd0: str) -> str:
-    """
-    Map a command to an action class.
-    This is intentionally conservative.
-    """
-    ro = {"ls", "cat", "grep", "find"}
-    mut = {"rm", "mv", "cp", "sed", "truncate"}
+def _classify_command(cmd0: str, policy: Dict[str, Any]) -> str:
+    ro = set(policy.get("read_only_commands", []) or [])
+    mut = set(policy.get("requires_intent_commands", []) or [])
     if cmd0 in ro:
         return "read_only"
     if cmd0 in mut:
@@ -216,23 +226,14 @@ def _classify_command(cmd0: str) -> str:
 
 
 def _estimate_files_touched(cmd: List[str], cwd: Path) -> int:
-    """
-    V1: naive file-touch estimate by counting path-like args that exist under cwd.
-    Conservative: if unsure, return a high number.
-    """
     touched = 0
     for a in cmd[1:]:
-        # Skip flags
         if a.startswith("-"):
             continue
         p = (cwd / a).resolve()
         try:
             if p.exists():
-                if p.is_dir():
-                    # Directory touch is ambiguous; treat as 10
-                    touched += 10
-                else:
-                    touched += 1
+                touched += 10 if p.is_dir() else 1
         except Exception:
             return 9999
     return touched
@@ -253,36 +254,31 @@ def decide(
 
     cmd0 = cmd[0]
     normalized = " ".join(shlex.quote(x) for x in cmd)
-    action_class = _classify_command(cmd0)
+    action_class = _classify_command(cmd0, policy)
 
-    read_only = set(policy.get("read_only_commands", []) or [])
-    requires_intent = set(policy.get("requires_intent_commands", []) or [])
     deny_default = policy.get("deny_globs_default", []) or []
     max_files_default = policy.get("max_files_default", 50)
 
-    # Default deny unknown commands (v1)
+    # 1) Unknown -> deny
     if action_class == "unknown":
         return GateDecision(False, f"DENY: unknown command '{cmd0}' (default deny).", normalized)
 
-    # Read-only allowlist
+    # 2) Read-only -> allow (classification already enforced policy membership)
     if action_class == "read_only":
-        if cmd0 not in read_only:
-            return GateDecision(False, f"DENY: read-only command '{cmd0}' not allowed by policy.", normalized)
         return GateDecision(True, "ALLOW: read-only command permitted by policy.", normalized)
 
-    # Mutating commands require intent (as listed in policy)
-    if action_class == "mutating" and cmd0 not in requires_intent:
-        # Conservative: command is mutating but not explicitly supported.
-        return GateDecision(False, f"DENY: mutating command '{cmd0}' not explicitly supported.", normalized)
-
-    if cmd0 in requires_intent:
-        if intent is None:
-            return GateDecision(False, f"DENY: '{cmd0}' requires an Intent Record.", normalized)
-
-        # Estimate touched files early (used by multiple deny paths)
+    # 3) Mutating -> requires IR + validations
+    if action_class == "mutating":
         touched = _estimate_files_touched(cmd, sandbox_root)
 
-        # Deny dangerous targets (regardless of IR)
+        if intent is None:
+            return GateDecision(
+                False,
+                f"DENY: '{cmd0}' requires an Intent Record.",
+                normalized,
+                files_touched=touched,
+            )
+
         dangerous = {".", "..", "/", "~"}
         for a in cmd[1:]:
             if a.startswith("-"):
@@ -295,8 +291,6 @@ def decide(
                     files_touched=touched,
                 )
 
-        # Prevent "double-sandbox" mistakes + forbid abs paths
-        # Since we execute with cwd=sandbox_root, paths should be relative to sandbox_root.
         for a in cmd[1:]:
             if a.startswith("-"):
                 continue
@@ -315,7 +309,6 @@ def decide(
                     files_touched=touched,
                 )
 
-        # Validate intent basics
         sig = (intent.get("signature") or "").strip()
         if not sig:
             return GateDecision(False, "DENY: Intent Record missing signature.", normalized, files_touched=touched)
@@ -324,9 +317,13 @@ def decide(
         root = (scope.get("root") or "").strip()
         expires = (scope.get("expires") or "").strip()
         if not root or not expires:
-            return GateDecision(False, "DENY: Intent Record missing scope.root or scope.expires.", normalized, files_touched=touched)
+            return GateDecision(
+                False,
+                "DENY: Intent Record missing scope.root or scope.expires.",
+                normalized,
+                files_touched=touched,
+            )
 
-        # Root must match sandbox_root exactly (v1: strict)
         try:
             ir_root = Path(root).expanduser().resolve()
         except Exception:
@@ -340,16 +337,19 @@ def decide(
                 files_touched=touched,
             )
 
-        # Expiry check
         try:
             exp = _parse_dt(expires)
         except Exception:
-            return GateDecision(False, "DENY: Intent Record expires is not parseable datetime.", normalized, files_touched=touched)
+            return GateDecision(
+                False,
+                "DENY: Intent Record expires is not parseable datetime.",
+                normalized,
+                files_touched=touched,
+            )
 
         if _now_utc() > exp:
             return GateDecision(False, "DENY: Intent Record is expired.", normalized, files_touched=touched)
 
-        # Action class allowlist
         allowed_classes = set(intent.get("allowed_action_classes") or [])
         cmd_to_needed = {
             "rm": "delete",
@@ -367,12 +367,10 @@ def decide(
                 files_touched=touched,
             )
 
-        # Deny globs (intent overrides default by union)
         deny_globs = set(deny_default)
         deny_globs.update(intent.get("constraints", {}).get("deny_globs") or [])
         deny_globs_list = sorted(deny_globs)
 
-        # Enforce max_files
         max_files = intent.get("constraints", {}).get("max_files") or max_files_default
         try:
             max_files = int(max_files)
@@ -387,7 +385,6 @@ def decide(
                 files_touched=touched,
             )
 
-        # Enforce deny_globs against provided args (relative to sandbox_root when possible)
         for a in cmd[1:]:
             if a.startswith("-"):
                 continue
@@ -406,7 +403,7 @@ def decide(
 
         return GateDecision(True, "ALLOW: Intent Record validated for mutating command.", normalized, files_touched=touched)
 
-    # If we ever reach here, deny conservatively
+    # Defensive fallback (should be unreachable)
     return GateDecision(False, f"DENY: command '{cmd0}' not allowed by policy.", normalized)
 
 
@@ -424,6 +421,7 @@ def main() -> int:
     ap.add_argument("--policy", default="policies/policy.yaml", help="Path to policy YAML.")
     ap.add_argument("--intent", default=None, help="Path to Intent Record (markdown). Required for mutating commands.")
     ap.add_argument("--sandbox", default="sandbox", help="Sandbox root (must match IR scope.root).")
+    ap.add_argument("--audit", default="audit.jsonl", help="Append-only audit log (JSONL).")
     ap.add_argument("--dry-run", action="store_true", help="Decide but do not execute.")
     ap.add_argument("--print-decision", action="store_true", help="Print decision and exit.")
     ap.add_argument("command", nargs=argparse.REMAINDER, help="Command to run (e.g., -- ls -la).")
@@ -433,7 +431,12 @@ def main() -> int:
     policy_path = Path(args.policy)
     sandbox_root = Path(args.sandbox).expanduser().resolve()
 
+    audit_path = Path(args.audit).expanduser()
+    if not audit_path.is_absolute():
+        audit_path = (Path.cwd() / audit_path).resolve()
+
     policy = _load_yaml(policy_path)
+
     intent = None
     if args.intent:
         intent = _parse_intent_record_md(Path(args.intent))
@@ -443,6 +446,21 @@ def main() -> int:
         cmd = cmd[1:]
 
     decision = decide(cmd, policy, intent, sandbox_root)
+
+    _append_audit(
+        audit_path,
+        {
+            "event": "decision",
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "cmd": decision.normalized_command,
+            "files_touched_est": decision.files_touched,
+            "policy": str(policy_path),
+            "intent_path": str(Path(args.intent).resolve()) if args.intent else None,
+            "sandbox_root": str(sandbox_root),
+            "dry_run": bool(args.dry_run),
+        },
+    )
 
     if args.print_decision or args.dry_run:
         print(f"{'ALLOW' if decision.allowed else 'DENY'}: {decision.reason}")
@@ -457,6 +475,22 @@ def main() -> int:
         return 2
 
     rc, out, err = run_command(cmd, sandbox_root)
+
+    def _preview(s: str, n: int = 2000) -> str:
+        s = s or ""
+        return s if len(s) <= n else s[:n] + "...(truncated)"
+
+    _append_audit(
+        audit_path,
+        {
+            "event": "execution",
+            "cmd": decision.normalized_command,
+            "returncode": rc,
+            "stdout_preview": _preview(out),
+            "stderr_preview": _preview(err),
+        },
+    )
+
     if out:
         sys.stdout.write(out)
     if err:
