@@ -39,6 +39,10 @@ test:
 
 demo:
 	@set -euo pipefail; \
+	if [ -z "$(SANDBOX)" ] || [ "$(SANDBOX)" = "/" ] || [ "$(SANDBOX)" = "." ] || [ "$(SANDBOX)" = ".." ]; then \
+		echo "FATAL: SANDBOX is unsafe: '$(SANDBOX)'"; exit 2; \
+	fi; \
+	rm -f audit.jsonl; \
 	mkdir -p "$(SANDBOX)"; \
 	echo "hello" > "$(SANDBOX)/foo.txt"; \
 	IR="$$( $(IR_TOOL) new --root "$(SANDBOX)" --actions delete --note "delete foo.txt in sandbox" )"; \
@@ -51,11 +55,28 @@ demo:
 	echo ""; \
 	echo "3) Execute delete (should succeed):"; \
 	$(INTENT_GATE) --intent "$$IR" -- rm foo.txt; \
+	test ! -e "$(SANDBOX)/foo.txt"; \
 	echo ""; \
 	echo "4) Sandbox listing:"; \
-	ls -la "$(SANDBOX)"
+	ls -la "$(SANDBOX)"; \
+	echo ""; \
+	echo "5) Audit tail:"; \
+	tail -n 4 audit.jsonl; \
+	echo ""; \
+	echo "6) Audit assertions:"; \
+	grep -q '"event": "execution"' audit.jsonl; \
+	grep -q '"returncode": 0' audit.jsonl; \
+	echo "OK: execution recorded and returncode=0"; \
+	echo ""; \
+	echo "7) Audit counts:"; \
+	grep -c '"event": "decision"' audit.jsonl; \
+	grep -c '"event": "execution"' audit.jsonl
 
 clean:
-	rm -rf "$(SANDBOX)"/*
-	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
+	@set -euo pipefail; \
+	if [ -z "$(SANDBOX)" ] || [ "$(SANDBOX)" = "/" ] || [ "$(SANDBOX)" = "." ] || [ "$(SANDBOX)" = ".." ]; then \
+		echo "FATAL: SANDBOX is unsafe: '$(SANDBOX)'"; exit 2; \
+	fi; \
+	rm -rf -- "$(SANDBOX)"/*; \
+	find . -name "__pycache__" -type d -prune -exec rm -rf {} +; \
 	find . -name "*.pyc" -delete
