@@ -447,6 +447,7 @@ def main() -> int:
 
     decision = decide(cmd, policy, intent, sandbox_root)
 
+    # --- decision audit (always) ---
     _append_audit(
         audit_path,
         {
@@ -462,6 +463,7 @@ def main() -> int:
         },
     )
 
+    # Print decision / dry-run paths
     if args.print_decision or args.dry_run:
         print(f"{'ALLOW' if decision.allowed else 'DENY'}: {decision.reason}")
         print(f"cmd: {decision.normalized_command}")
@@ -469,17 +471,20 @@ def main() -> int:
             print(f"files_touched_est: {decision.files_touched}")
         return 0 if decision.allowed else 2
 
+    # Hard deny
     if not decision.allowed:
         print(f"DENY: {decision.reason}", file=sys.stderr)
         print(f"cmd: {decision.normalized_command}", file=sys.stderr)
         return 2
 
+    # Execute
     rc, out, err = run_command(cmd, sandbox_root)
 
     def _preview(s: str, n: int = 2000) -> str:
         s = s or ""
         return s if len(s) <= n else s[:n] + "...(truncated)"
 
+    # --- execution audit (only after running) ---
     _append_audit(
         audit_path,
         {
@@ -488,6 +493,11 @@ def main() -> int:
             "returncode": rc,
             "stdout_preview": _preview(out),
             "stderr_preview": _preview(err),
+            # forensic context
+            "policy": str(policy_path),
+            "intent_path": str(Path(args.intent).resolve()) if args.intent else None,
+            "sandbox_root": str(sandbox_root),
+            "dry_run": False,
         },
     )
 
@@ -496,7 +506,6 @@ def main() -> int:
     if err:
         sys.stderr.write(err)
     return rc
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
