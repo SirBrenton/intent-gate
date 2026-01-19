@@ -22,7 +22,7 @@ That creates **irreversible outcomes** and **liability**:
 - moving/renaming critical files (`mv`)
 - copying into restricted locations (`cp`)
 
-When a system can mutate state, "oops" is no longer a minor bug—it's damage.
+When a system can mutate state, "oops" is no longer a minor bug--it's damage.
 
 ---
 
@@ -38,22 +38,22 @@ Default posture: **deny**.
 
 ## Objections (answered)
 
-**“Can an agent generate its own Intent Record?”**  
+**"Can an agent generate its own Intent Record?"**  
 Not inside this trust boundary. `intent-gate` assumes the Intent Record is created outside the agent (by a human or a separate trusted UX) and then passed in. The gate verifies scope/expiry/signature/policy constraints before any mutation.
 
-**“Could a vendor turn a checkbox into ‘intent’ and shift liability?”**  
-A checkbox can be turned into an IR, but that’s equivalent to issuing broad credentials. intent-gate can’t fix bad governance upstream—it makes the governance **explicit, inspectable, and auditable** (scope + expiry + action-class + constraints). If you mint wide IRs, you get wide permissions. Intent-gate is agnostic to how the IR is minted (checkbox, UI workflow, human-written file, etc.). It doesn’t adjudicate legitimacy; it enforces only what the IR explicitly grants (scope, expiry, action class, constraints) and logs decision + execution.
+**"Could a vendor turn a checkbox into 'intent' and shift liability?"**  
+A checkbox can be turned into an IR, but that's equivalent to issuing broad credentials. intent-gate can't fix bad governance upstream--it makes the governance **explicit, inspectable, and auditable** (scope + expiry + action-class + constraints). If you mint wide IRs, you get wide permissions. Intent-gate is agnostic to how the IR is minted (checkbox, UI workflow, human-written file, etc.). It doesn't adjudicate legitimacy; it enforces only what the IR explicitly grants (scope, expiry, action class, constraints) and logs decision + execution.
 
-**“Isn’t this just blockchain/consensus?”**  
-No. Blockchains solve multi-party consensus in adversarial networks. `intent-gate` solves a local refusal boundary: deterministic allow/deny + append-only audit for destructive commands. No consensus protocol, no network, no distributed state—just a local gate + append-only log.
+**"Isn't this just blockchain/consensus?"**  
+No. Blockchains solve multi-party consensus in adversarial networks. `intent-gate` solves a local refusal boundary: deterministic allow/deny + append-only audit for destructive commands. No consensus protocol, no network, no distributed state--just a local gate + append-only log.
 
 ---
 
 ## 3) The Artifact
 
-The gate composes policy defaults with per–Intent Record constraints.
+The gate composes policy defaults with per-Intent Record constraints.
 
-- `deny_globs` are **unioned** (policy ∪ IR)
+- `deny_globs` are **unioned** (policy U IR)
 - `max_files` comes from the IR **when present**; otherwise the policy default applies
 
 It then makes a deterministic allow/deny decision.
@@ -146,9 +146,9 @@ make demo
 ```
 ### `make demo` runs three scenarios:
 
-1. **DENY** — `rm` without an Intent Record  
-2. **ALLOW (dry-run)** — `rm` with a valid Intent Record  
-3. **ALLOW (execute)** — actually deletes the file inside the sandbox
+1. **DENY** -- `rm` without an Intent Record  
+2. **ALLOW (dry-run)** -- `rm` with a valid Intent Record  
+3. **ALLOW (execute)** -- actually deletes the file inside the sandbox
 4. Sandbox is empty (or at least `foo.txt` is gone)
 5. Audit log shows decision + execution events
 
@@ -176,7 +176,7 @@ tail -n 4 audit.jsonl
 ```
 
 ### Mini-agent demo (optional)
-`src/mini_agent.py` is a deliberately tiny deterministic “agent” that maps simple tasks to filesystem commands
+`src/mini_agent.py` is a deliberately tiny deterministic "agent" that maps simple tasks to filesystem commands
 and routes them through the gate (not an LLM; included to demonstrate the workflow end-to-end).
 ```bash
 rm -f audit.jsonl
@@ -195,25 +195,25 @@ tail -n 4 audit.jsonl
 
 **This is not:**
 - a universal governance layer
-- an “AI alignment” solution
+- an "AI alignment" solution
 - a policy language standard
 - an enterprise integration platform
 - a sandbox / containment system
 - a fundraising pitch
 - a network effect product
 
-This is a small enforceable refusal boundary: “no irreversible actions without explicit intent.”
+This is a small enforceable refusal boundary: "no irreversible actions without explicit intent."
 
 ---
 
 **Repository Structure**
-- src/intent_gate.py — gatekeeper CLI (allow/deny + execute)
-- src/ir_tool.py — generates YAML front-matter Intent Records
-- src/mini_agent.py — tiny deterministic “agent” routed through intent-gate
-- policies/policy.yaml — command allowlists + defaults
-- intent_records/ — IR templates + (ignored) generated IRs
-- tests/ — pytest coverage
-- Makefile — canonical demo + tests
+- src/intent_gate.py -- gatekeeper CLI (allow/deny + execute)
+- src/ir_tool.py -- generates YAML front-matter Intent Records
+- src/mini_agent.py -- tiny deterministic "agent" routed through intent-gate
+- policies/policy.yaml -- command allowlists + defaults
+- intent_records/ -- IR templates + (ignored) generated IRs
+- tests/ -- pytest coverage
+- Makefile -- canonical demo + tests
 
 ---
 

@@ -77,6 +77,6 @@ clean:
 	if [ -z "$(SANDBOX)" ] || [ "$(SANDBOX)" = "/" ] || [ "$(SANDBOX)" = "." ] || [ "$(SANDBOX)" = ".." ]; then \
 		echo "FATAL: SANDBOX is unsafe: '$(SANDBOX)'"; exit 2; \
 	fi; \
-	rm -rf -- "$(SANDBOX)"/*
+	rm -rf -- "$(SANDBOX)"/*; \
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +; \
 	find . -name "*.pyc" -delete
