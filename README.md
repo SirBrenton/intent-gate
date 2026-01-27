@@ -223,3 +223,11 @@ This is a small enforceable refusal boundary: "no irreversible actions without e
 - Deterministic decisions
 - Human reviewable intent
 - Easy to demo quickly
+
+---
+
+## Related Artifact
+
+- **Refusal Boundary Checklist for Agentic Systems**
+  - [Markdown](docs/REFUSAL_BOUNDARY_CHECKLIST.md)
+  - [PDF](docs/REFUSAL_BOUNDARY_CHECKLIST.pdf)
