@@ -1,0 +1,3 @@
+DENY: DENY: 'rm' requires an Intent Record.
+cmd: rm foo.txt
+files_touched_est: 1

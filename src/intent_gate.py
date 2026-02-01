@@ -47,6 +47,46 @@ class GateDecision:
 # Helpers
 # -----------------------------
 
+def _strip_prefix(reason: str, prefix: str) -> str:
+    r = (reason or "").strip()
+    return r[len(prefix):].lstrip() if r.startswith(prefix) else r
+
+def _denial_context_snapshot(reason: str) -> Dict[str, Any]:
+    r = (reason or "").strip()
+
+    if "requires an Intent Record" in r:
+        summary = (
+            "Mutating commands require an explicit, scoped Intent Record to prevent "
+            "irreversible filesystem changes from untrusted execution."
+        )
+        classification = "MISSING_INTENT"
+        confidence = 0.85
+        evidence = {"category": "filesystem_mutation", "basis": "missing_intent"}
+    elif "scope.root mismatch" in r:
+        summary = (
+            "Intent scope must match the sandbox root to prevent cross-boundary mutations "
+            "outside the authorized directory."
+        )
+        classification = "SCOPE_MISMATCH"
+        confidence = 0.80
+        evidence = {"category": "scope", "basis": "root_mismatch"}
+    else:
+        summary = (
+            "Refusal boundary triggered. Review the denial reason and provide a properly "
+            "scoped, unexpired Intent Record if mutation is intended."
+        )
+        classification = "REFUSAL_BOUNDARY"
+        confidence = 0.70
+        evidence = {"category": "refusal_boundary", "basis": "generic"}
+
+    return {
+        "classification": classification,
+        "confidence": confidence,
+        "summary": summary,
+        "evidence": evidence,
+        "note": "Note: This context did not influence the denial. It is explanatory only.",
+    }
+
 def _iso_utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -465,7 +505,21 @@ def main() -> int:
 
     # Print decision / dry-run paths
     if args.print_decision or args.dry_run:
-        print(f"{'ALLOW' if decision.allowed else 'DENY'}: {decision.reason}")
+        if decision.allowed:
+            reason = _strip_prefix(decision.reason, "ALLOW:")
+            print(f"ALLOW: {reason}")
+        else:
+            reason = _strip_prefix(decision.reason, "DENY:")
+            print(f"DENY: {reason}")
+
+            snap = _denial_context_snapshot(decision.reason)
+            print("Denial Context Snapshot:")
+            print(f"- Classification: {snap['classification']} (confidence {snap['confidence']:.2f})")
+            print(f"- Summary: {snap['summary']}")
+            ev = snap["evidence"]
+            print(f"- Evidence: category={ev['category']}; basis={ev['basis']}")
+            print(snap["note"])
+
         print(f"cmd: {decision.normalized_command}")
         if decision.files_touched:
             print(f"files_touched_est: {decision.files_touched}")
@@ -473,9 +527,20 @@ def main() -> int:
 
     # Hard deny
     if not decision.allowed:
-        print(f"DENY: {decision.reason}", file=sys.stderr)
+        reason = _strip_prefix(decision.reason, "DENY:")
+        print(f"DENY: {reason}", file=sys.stderr)
+
+        snap = _denial_context_snapshot()
+        print("Denial Context Snapshot:", file=sys.stderr)
+        print(f"- Classification: {snap['classification']} (confidence {snap['confidence']:.2f})", file=sys.stderr)
+        print(f"- Summary: {snap['summary']}", file=sys.stderr)
+        ev = snap["evidence"]
+        print(f"- Evidence: category={ev['category']}; basis={ev['basis']}", file=sys.stderr)
+        print(snap["note"], file=sys.stderr)
+
         print(f"cmd: {decision.normalized_command}", file=sys.stderr)
         return 2
+
 
     # Execute
     rc, out, err = run_command(cmd, sandbox_root)

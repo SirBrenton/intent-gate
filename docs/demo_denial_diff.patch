@@ -1,0 +1,12 @@
+--- docs/demo_before_denial.txt	2026-02-01 10:33:30
++++ docs/demo_after_denial.txt	2026-02-01 10:42:47
+@@ -1,3 +1,8 @@
+-DENY: DENY: 'rm' requires an Intent Record.
++DENY: 'rm' requires an Intent Record.
++Denial Context Snapshot:
++- Classification: MISSING_INTENT (confidence 0.85)
++- Summary: Mutating commands require an explicit, scoped Intent Record to prevent irreversible filesystem changes from untrusted execution.
++- Evidence: category=filesystem_mutation; basis=missing_intent
++Note: This context did not influence the denial. It is explanatory only.
+ cmd: rm foo.txt
+ files_touched_est: 1
