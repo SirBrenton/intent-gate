@@ -1,0 +1,8 @@
+DENY: scope.root mismatch (IR=<TMP> != sandbox=/Users/REDACTED
+Denial Context Snapshot:
+- Classification: SCOPE_MISMATCH (confidence 0.80)
+- Summary: Intent scope must match the sandbox root to prevent cross-boundary mutations outside the authorized directory.
+- Evidence: category=scope; basis=root_mismatch
+Note: This context did not influence the denial. It is explanatory only.
+cmd: rm foo.txt
+files_touched_est: 1
