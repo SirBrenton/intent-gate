@@ -220,4 +220,8 @@ intent_records/IR-*.md
 # audit logs (generated)
 audit.jsonl
 audit*.jsonl
-audit/
+audit/docs/demo_denial_diff.patch
+
+tmp/
+audit.jsonl
+
