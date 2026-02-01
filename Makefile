@@ -1,13 +1,19 @@
+# Refuse old Apple /usr/bin/make (3.81) because we rely on .ONESHELL (>= 3.82)
+ifeq ($(MAKE_VERSION),3.81)
+$(error This repo requires GNU Make >= 3.82. Use `gmake` or `./makew`.)
+endif
+
 PY 				:= .venv/bin/python
 PIP 			:= .venv/bin/pip
-INTENT_GATE		:= ./src/intent_gate.py
-IR_TOOL 		:= ./src/ir_tool.py
+INTENT_GATE 	:= $(PY) ./src/intent_gate.py
+IR_TOOL 		:= $(PY) ./src/ir_tool.py
 SANDBOX 		:= sandbox
 
 DOCS 			:= docs
 DEMO_BEFORE 	:= $(DOCS)/demo_before_denial.txt
 DEMO_AFTER 		:= $(DOCS)/demo_after_denial.txt
 DEMO_DIFF 		:= $(DOCS)/demo_denial_diff.patch
+DEMO_SCOPE 		:= $(DOCS)/demo_scope_mismatch.txt
 
 SHELL 			:= /bin/bash
 .ONESHELL:
@@ -88,21 +94,12 @@ demo:
 
 
 evidence:
-	@set -euo pipefail
-	mkdir -p "$(DOCS)" tmp "$(SANDBOX)"
-	rm -f audit.jsonl
-	echo "hello" > "$(SANDBOX)/foo.txt"
-	@# BEFORE: do not overwrite baseline unless you intend to
-	if [ ! -f "$(DEMO_BEFORE)" ]; then
-		$(INTENT_GATE) --dry-run --print-decision -- rm foo.txt 2>&1 | tee "$(DEMO_BEFORE)" >/dev/null || true
-	fi
-	@# AFTER: always regenerate from current code
-	$(INTENT_GATE) --dry-run --print-decision -- rm foo.txt 2>&1 | tee "$(DEMO_AFTER)" >/dev/null || true
-	diff -u "$(DEMO_BEFORE)" "$(DEMO_AFTER)" >"$(DEMO_DIFF)" || true
-	grep -q "Denial Context Snapshot" "$(DEMO_AFTER)"
-	grep -q "did not influence the denial" "$(DEMO_AFTER)"
-	! grep -q "DENY: DENY:" "$(DEMO_AFTER)"
-	echo "OK: evidence artifacts regenerated and assertions passed"
+	@DOCS="$(DOCS)" SANDBOX="$(SANDBOX)" PY="$(PY)" \
+	  INTENT_GATE='$(INTENT_GATE)' IR_TOOL='$(IR_TOOL)' \
+	  DEMO_BEFORE="$(DEMO_BEFORE)" DEMO_AFTER="$(DEMO_AFTER)" \
+	  DEMO_DIFF="$(DEMO_DIFF)" DEMO_SCOPE="$(DEMO_SCOPE)" \
+	  ./scripts/evidence.sh
+
 
 clean:
 	@set -euo pipefail
