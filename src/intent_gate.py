@@ -62,6 +62,7 @@ def _denial_context_snapshot(reason: str) -> Dict[str, Any]:
         classification = "MISSING_INTENT"
         confidence = 0.85
         evidence = {"category": "filesystem_mutation", "basis": "missing_intent"}
+
     elif "scope.root mismatch" in r:
         summary = (
             "Intent scope must match the sandbox root to prevent cross-boundary mutations "
@@ -70,6 +71,16 @@ def _denial_context_snapshot(reason: str) -> Dict[str, Any]:
         classification = "SCOPE_MISMATCH"
         confidence = 0.80
         evidence = {"category": "scope", "basis": "root_mismatch"}
+
+    elif "matches deny_glob" in r:
+        summary = (
+            "The target matches a denied glob pattern (policy defaults ∪ intent constraints). "
+            "This blocks deletion or overwrite of protected or sensitive paths even when an Intent Record exists."
+        )
+        classification = "DENY_GLOB_MATCH"
+        confidence = 0.85
+        evidence = {"category": "constraints", "basis": "deny_glob_match"}
+
     else:
         summary = (
             "Refusal boundary triggered. Review the denial reason and provide a properly "
@@ -247,11 +258,28 @@ def _parse_dt(dt_str: str) -> datetime:
 
 
 def _match_any_glob(path_str: str, globs: List[str]) -> bool:
-    s = path_str.replace("\\", "/")
+    """
+    Match gitignore-ish globs against a relative path.
+
+    Important: Python fnmatch treats '**/*.pem' as requiring a slash, so it will NOT
+    match 'secret.pem' at root. We treat a leading '**/' as "zero or more dirs".
+    """
+    s = path_str.replace("\\", "/").lstrip("./")
+    base = s.split("/")[-1]
+
     for g in globs:
-        gg = g.replace("\\", "/")
+        gg = (g or "").replace("\\", "/").strip()
+
+        # direct match (normal case)
         if fnmatch.fnmatch(s, gg):
             return True
+
+        # gitignore-ish: '**/X' should also match 'X' at root
+        if gg.startswith("**/"):
+            tail = gg[3:]
+            if fnmatch.fnmatch(s, tail) or fnmatch.fnmatch(base, tail):
+                return True
+
     return False
 
 
