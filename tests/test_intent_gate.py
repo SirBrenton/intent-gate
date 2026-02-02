@@ -132,3 +132,40 @@ def test_deny_action_not_allowed(tmp_path: Path):
     d = decide(["rm", "x.txt"], policy, ir, sandbox_root)
     assert d.allowed is False
     assert "does not allow action 'delete'" in d.reason
+
+def test_deny_glob_match_blocks_delete_at_root(tmp_path: Path):
+    policy_path = tmp_path / "policy.yaml"
+    write_policy(policy_path)
+    policy = yaml.safe_load(policy_path.read_text())
+
+    sandbox_root = tmp_path / "sandbox"
+    sandbox_root.mkdir()
+    (sandbox_root / "secret.pem").write_text("secret", encoding="utf-8")
+
+    ir_path = tmp_path / "IR.md"
+    write_ir(ir_path, sandbox_root, actions=["delete"], deny_globs=[])  # prove policy globs work
+    ir = _parse_intent_record_md(ir_path)
+
+    d = decide(["rm", "secret.pem"], policy, ir, sandbox_root)
+    assert d.allowed is False
+
+def test_deny_deny_glob_match(tmp_path: Path):
+    policy_path = tmp_path / "policy.yaml"
+    write_policy(policy_path)
+    policy = yaml.safe_load(policy_path.read_text())
+
+    sandbox_root = tmp_path / "sandbox"
+    sandbox_root.mkdir()
+
+    # Create a file that matches a default deny_glob
+    (sandbox_root / "secret.pem").write_text("top secret", encoding="utf-8")
+
+    # Create an otherwise-valid Intent Record that WOULD allow delete
+    ir_path = tmp_path / "IR.md"
+    write_ir(ir_path, sandbox_root, actions=["delete"])
+    ir = _parse_intent_record_md(ir_path)
+
+    d = decide(["rm", "secret.pem"], policy, ir, sandbox_root)
+
+    assert d.allowed is False
+    assert "matches deny_glob" in d.reason
