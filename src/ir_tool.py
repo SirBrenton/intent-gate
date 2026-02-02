@@ -34,12 +34,8 @@ def _normalize_root(root: Path) -> Path:
     return root.expanduser().resolve()
 
 
-def _expires_str(expires_hours: Optional[int]) -> str:
-    if expires_hours is None:
-        # leave blank (meaning "no expiry" is not great; better to require one, but keep minimal)
-        return ""
+def _expires_str(expires_hours: int) -> str:
     exp_dt = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
-    # keep ISO-ish; gate tests accept a string, but parser likely treats as text
     return exp_dt.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
@@ -53,7 +49,7 @@ def render_ir(
     signer_name: str = "Brent Williams",
 ) -> str:
     deny_globs = deny_globs or DEFAULT_DENY_GLOBS
-    expires = _expires_str(expires_hours) or "2099-01-01T00:00:00-08:00"
+    expires = _expires_str(expires_hours if expires_hours is not None else 24)
 
     intent_line = note.strip() if note.strip() else "(fill in: what outcome are you authorizing?)"
 
@@ -105,6 +101,8 @@ def main() -> int:
     newp.add_argument("--deny-glob", action="append", default=None, help="Add deny glob (repeatable).")
     newp.add_argument("--dir", default="intent_records", help="Intent records directory (default: intent_records).")
     newp.add_argument("--print", action="store_true", help="Print IR content to stdout instead of writing file.")
+    newp.add_argument("--out", default=None, help="Write IR to this exact path (overwrites).")
+
 
     args = ap.parse_args()
     root = _normalize_root(Path(args.root))
@@ -130,7 +128,12 @@ def main() -> int:
         print(content)
         return 0
 
-    out_path = _default_ir_path(ir_dir)
+    if args.out:
+        out_path = Path(args.out).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        out_path = _default_ir_path(ir_dir)
+
     out_path.write_text(content, encoding="utf-8")
     print(str(out_path))
     return 0

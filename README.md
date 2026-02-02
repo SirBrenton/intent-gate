@@ -169,11 +169,16 @@ Regenerates reproducible denial artifacts and a scope-mismatch denial transcript
 ```bash
 ./makew evidence
 ```
-Outputs:
+Missing-intent denial
 - docs/demo_before_denial.txt (baseline; created only if missing)
 - docs/demo_after_denial.txt (current run)
 - docs/demo_denial_diff.patch (sanitized diff; deterministic)
-- docs/demo_scope_mismatch.txt (scope mismatch denial)
+
+Scope-mismatch denial
+- docs/demo_scope_mismatch_before.txt (baseline; created only if missing)
+- docs/demo_scope_mismatch_after.txt (current run)
+- docs/demo_scope_mismatch_diff.patch (sanitized diff; deterministic)
+- docs/demo_scope_mismatch.txt (compat: copy of scope-mismatch “after”)
 
 ### `make demo` runs three scenarios:
 
