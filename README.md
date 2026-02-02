@@ -9,6 +9,17 @@ V1 is intentionally small:
 - human-reviewable intent
 - easy to demo in under a minute
 
+## Requirements
+
+- Python 3 (tested with a local `.venv`)
+- **GNU Make ≥ 3.82** (macOS `/usr/bin/make` is 3.81 and will fail)
+
+Use the repo wrapper:
+
+```bash
+./makew --version
+./makew demo
+```
 ---
 
 ## 1) The Problem
@@ -139,11 +150,31 @@ The gate writes an append-only JSONL audit log:
 ### Quick start
 
 ```bash
-make venv
-make deps
-make test
-make demo
+./makew venv
+./makew deps
+./makew test
+./makew demo
 ```
+
+### One-shot:
+
+```bash
+./makew clean && ./makew test && ./makew evidence && ./makew demo
+```
+
+### Evidence (deterministic artifacts)
+
+Regenerates reproducible denial artifacts and a scope-mismatch denial transcript:
+
+```bash
+./makew evidence
+```
+Outputs:
+- docs/demo_before_denial.txt (baseline; created only if missing)
+- docs/demo_after_denial.txt (current run)
+- docs/demo_denial_diff.patch (sanitized diff; deterministic)
+- docs/demo_scope_mismatch.txt (scope mismatch denial)
+
 ### `make demo` runs three scenarios:
 
 1. **DENY** -- `rm` without an Intent Record  
@@ -166,11 +197,11 @@ rm -f audit.jsonl
 mkdir -p sandbox && echo "hello" > sandbox/foo.txt
 
 # DENY without intent (dry-run)
-./src/intent_gate.py --dry-run --print-decision -- rm foo.txt || true
+.venv/bin/python ./src/intent_gate.py --dry-run --print-decision -- rm foo.txt || true
 
 # Create intent + execute
-IR=$(./src/ir_tool.py new --root sandbox --actions delete --note "delete foo.txt in sandbox")
-./src/intent_gate.py --intent "$IR" -- rm foo.txt
+IR=$(.venv/bin/python ./src/ir_tool.py new --root sandbox --actions delete --note "delete foo.txt in sandbox")
+.venv/bin/python ./src/intent_gate.py --intent "$IR" -- rm foo.txt
 
 tail -n 4 audit.jsonl
 ```
@@ -182,10 +213,10 @@ and routes them through the gate (not an LLM; included to demonstrate the workfl
 rm -f audit.jsonl
 mkdir -p sandbox && echo "hello" > sandbox/foo.txt
 
-./src/mini_agent.py "delete foo.txt" || true
+.venv/bin/python ./src/mini_agent.py "delete foo.txt" || true
 
-IR=$(./src/ir_tool.py new --root sandbox --actions delete --note "delete foo.txt in sandbox")
-./src/mini_agent.py --intent "$IR" --execute "delete foo.txt"
+IR=$(.venv/bin/python ./src/ir_tool.py new --root sandbox --actions delete --note "delete foo.txt in sandbox")
+.venv/bin/python ./src/mini_agent.py --intent "$IR" --execute "delete foo.txt"
 
 tail -n 4 audit.jsonl
 ```
