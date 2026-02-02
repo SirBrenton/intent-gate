@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import List, Optional
 
 
+def repo_root_from_file() -> Path:
+    # src/mini_agent.py -> repo root
+    return Path(__file__).resolve().parent.parent
+
+
 def build_plan(task: str) -> List[List[str]]:
     """
     Supported tasks (v0):
@@ -50,6 +55,7 @@ def build_plan(task: str) -> List[List[str]]:
 
 
 def gate_argv(
+    py: str,
     gate_path: Path,
     policy_path: Path,
     sandbox_root: Path,
@@ -60,7 +66,9 @@ def gate_argv(
     dry_run: bool,
     print_decision: bool,
 ) -> List[str]:
+    # CRITICAL: run gate via the SAME interpreter as mini_agent (venv-safe)
     argv: List[str] = [
+        py,
         str(gate_path),
         "--policy", str(policy_path),
         "--sandbox", str(sandbox_root),
@@ -86,14 +94,21 @@ def run(argv: List[str]) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="mini-agent", description="Minimal agent routed through intent-gate.")
-    ap.add_argument("task", help='Task string, e.g. \'delete foo.txt\'')
+    repo_root = repo_root_from_file()
+
+    ap = argparse.ArgumentParser(
+        prog="mini-agent",
+        description="Minimal agent routed through intent-gate.",
+    )
+    ap.add_argument("task", help="Task string, e.g. 'delete foo.txt'")
     ap.add_argument("--intent", default=None, help="Path to Intent Record (required for mutating commands).")
     ap.add_argument("--execute", action="store_true", help="Actually execute (default is dry-run).")
-    ap.add_argument("--gate", default="src/intent_gate.py", help="Path to intent_gate.py")
-    ap.add_argument("--policy", default="policies/policy.yaml", help="Path to policy.yaml")
-    ap.add_argument("--sandbox", default="sandbox", help="Sandbox root directory")
-    ap.add_argument("--audit", default="audit.jsonl", help="Audit log path (JSONL)")
+
+    # Defaults are repo-root relative and stable regardless of current directory.
+    ap.add_argument("--gate", default=str(repo_root / "src" / "intent_gate.py"), help="Path to intent_gate.py")
+    ap.add_argument("--policy", default=str(repo_root / "policies" / "policy.yaml"), help="Path to policy.yaml")
+    ap.add_argument("--sandbox", default=str(repo_root / "sandbox"), help="Sandbox root directory")
+    ap.add_argument("--audit", default=str(repo_root / "audit.jsonl"), help="Audit log path (JSONL)")
 
     args = ap.parse_args()
 
@@ -104,8 +119,10 @@ def main() -> int:
         print(f"  {i}. {' '.join(shlex.quote(x) for x in c)}")
     print()
 
-    gate_path = Path(args.gate)
-    policy_path = Path(args.policy)
+    py = sys.executable  # <-- the interpreter that launched THIS mini_agent.py
+
+    gate_path = Path(args.gate).expanduser().resolve()
+    policy_path = Path(args.policy).expanduser().resolve()
     sandbox_root = Path(args.sandbox).expanduser().resolve()
 
     audit_path = Path(args.audit).expanduser()
@@ -119,6 +136,7 @@ def main() -> int:
     for cmd in plan:
         # 1) Always do a visible dry-run decision first (prints ALLOW/DENY)
         argv_decide = gate_argv(
+            py,
             gate_path, policy_path, sandbox_root, audit_path, intent_path, cmd,
             dry_run=True,
             print_decision=True,
@@ -134,9 +152,9 @@ def main() -> int:
         if rc_decide != 0:
             continue
 
-        # 2) Execute for real (IMPORTANT: do NOT pass --print-decision or --dry-run,
-        # or intent_gate.py will return before execution.)
+        # 2) Execute for real (IMPORTANT: no --print-decision, no --dry-run)
         argv_exec = gate_argv(
+            py,
             gate_path, policy_path, sandbox_root, audit_path, intent_path, cmd,
             dry_run=False,
             print_decision=False,

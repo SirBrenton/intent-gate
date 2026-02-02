@@ -101,6 +101,10 @@ evidence:
 	  ./scripts/evidence.sh
 
 
+.PHONY: all
+all: clean test evidence demo
+
+
 clean:
 	@set -euo pipefail
 	if [ -z "$(SANDBOX)" ] || [ "$(SANDBOX)" = "/" ] || [ "$(SANDBOX)" = "." ] || [ "$(SANDBOX)" = ".." ]; then
