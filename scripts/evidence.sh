@@ -8,8 +8,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PY="./.venv/bin/python"
-INTENT_GATE="$PY ./src/intent_gate.py"
-IR_TOOL="$PY ./src/ir_tool.py"
 
 SANDBOX="${SANDBOX:-sandbox}"
 DOCS="${DOCS:-docs}"
@@ -19,12 +17,11 @@ DEMO_BEFORE="${DEMO_BEFORE:-$DOCS/demo_before_denial.txt}"
 DEMO_AFTER="${DEMO_AFTER:-$DOCS/demo_after_denial.txt}"
 DEMO_DIFF="${DEMO_DIFF:-$DOCS/demo_denial_diff.patch}"
 
-# Scope-mismatch artifacts (new: before/after/diff)
+# Scope-mismatch artifacts (before/after/diff)
 DEMO_SCOPE_BEFORE="${DEMO_SCOPE_BEFORE:-$DOCS/demo_scope_mismatch_before.txt}"
 DEMO_SCOPE_AFTER="${DEMO_SCOPE_AFTER:-$DOCS/demo_scope_mismatch_after.txt}"
 DEMO_SCOPE_DIFF="${DEMO_SCOPE_DIFF:-$DOCS/demo_scope_mismatch_diff.patch}"
-
-# (optional legacy single-file output; keep if you want)
+# (compat) single-file output
 DEMO_SCOPE="${DEMO_SCOPE:-$DOCS/demo_scope_mismatch.txt}"
 
 AUDIT="${AUDIT:-audit.jsonl}"
@@ -32,8 +29,15 @@ AUDIT="${AUDIT:-audit.jsonl}"
 # -----------------------------
 # Helpers
 # -----------------------------
-
 die() { echo "FATAL: $*" >&2; exit 2; }
+
+run_gate() {
+  "$PY" ./src/intent_gate.py "$@"
+}
+
+run_ir() {
+  "$PY" ./src/ir_tool.py "$@"
+}
 
 sanitize() {
   # Normalize machine-specific and run-specific bits so artifacts don't churn.
@@ -82,7 +86,7 @@ echo "hello" > "$SANDBOX/foo.txt"
 # BEFORE (baseline): keep committed artifact unless missing
 if [[ ! -f "$DEMO_BEFORE" ]]; then
   set +e
-  eval "$INTENT_GATE --dry-run --print-decision -- rm foo.txt" 2>&1 \
+  run_gate --dry-run --print-decision -- rm foo.txt 2>&1 \
     | sanitize \
     | tee "$DEMO_BEFORE" >/dev/null
   true
@@ -91,7 +95,7 @@ fi
 
 # AFTER: always regenerate
 set +e
-eval "$INTENT_GATE --dry-run --print-decision -- rm foo.txt" 2>&1 \
+run_gate --dry-run --print-decision -- rm foo.txt 2>&1 \
   | sanitize \
   | tee "$DEMO_AFTER" >/dev/null
 true
@@ -114,23 +118,21 @@ echo "OK: denial before/after artifacts + diff regenerated and assertions passed
 # CASE 2: SCOPE_MISMATCH (baseline + current + diff)
 # -----------------------------
 
-# Create (or reuse) a stable "bad" IR on disk, so the transcript is reproducible
-# and doesn't depend on a fresh IR path every run.
+# Create (or reuse) a stable "bad" IR on disk so the transcript is reproducible.
 IR_BAD_PATH="$TMPDIR_REPO/IR_SCOPE_MISMATCH.md"
 
 needs_regen=0
 if [[ ! -f "$IR_BAD_PATH" ]]; then
   needs_regen=1
 elif ! grep -q '^signature:' "$IR_BAD_PATH"; then
-  # Old/bad file (e.g., path-string content) => regenerate
   needs_regen=1
 elif ! grep -q '^root:' "$IR_BAD_PATH"; then
   needs_regen=1
 fi
 
 if [[ "$needs_regen" -eq 1 ]]; then
-  # Write an actual IR file at a stable path (not just a printed path string).
-  "$PY" ./src/ir_tool.py new \
+  # Ensure we write an actual IR file to the stable path.
+  run_ir new \
     --root /tmp \
     --actions delete \
     --note "intentional scope mismatch" \
@@ -140,7 +142,7 @@ fi
 # BEFORE (baseline): create once if missing
 if [[ ! -f "$DEMO_SCOPE_BEFORE" ]]; then
   set +e
-  eval "$INTENT_GATE --dry-run --print-decision --intent \"$IR_BAD_PATH\" -- rm foo.txt" 2>&1 \
+  run_gate --dry-run --print-decision --intent "$IR_BAD_PATH" -- rm foo.txt 2>&1 \
     | sanitize \
     | tee "$DEMO_SCOPE_BEFORE" >/dev/null
   true
@@ -149,13 +151,13 @@ fi
 
 # AFTER: always regenerate
 set +e
-eval "$INTENT_GATE --dry-run --print-decision --intent \"$IR_BAD_PATH\" -- rm foo.txt" 2>&1 \
+run_gate --dry-run --print-decision --intent "$IR_BAD_PATH" -- rm foo.txt 2>&1 \
   | sanitize \
   | tee "$DEMO_SCOPE_AFTER" >/dev/null
 true
 set -e
 
-# Optional legacy single-file artifact (keep your existing filename around)
+# Optional compat artifact (keep older filename around)
 cp "$DEMO_SCOPE_AFTER" "$DEMO_SCOPE"
 
 # Diff for scope mismatch
