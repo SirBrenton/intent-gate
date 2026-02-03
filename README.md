@@ -181,6 +181,9 @@ Scope-mismatch denial
 - docs/demo_scope_mismatch.txt (compat: copy of scope-mismatch “after”)
 
 Deny-glob lock denial (policy-protected targets)
+
+Demonstrates that protected globs (e.g., **/*.pem) remain non-deletable by default even with a valid Intent Record.
+
 - docs/demo_deny_glob_before.txt (baseline; created only if missing)
 - docs/demo_deny_glob_after.txt (current run)
 - docs/demo_deny_glob_diff.patch (sanitized diff; deterministic)
