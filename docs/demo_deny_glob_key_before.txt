@@ -1,0 +1,8 @@
+DENY: argument 'secret.key' matches deny_glob.
+Denial Context Snapshot:
+- Classification: DENY_GLOB_MATCH (confidence 0.85)
+- Summary: The target matches a denied glob pattern (policy defaults ∪ intent constraints). This blocks deletion or overwrite of protected or sensitive paths even when an Intent Record exists.
+- Evidence: category=constraints; basis=deny_glob_match
+Note: This context did not influence the denial. It is explanatory only.
+cmd: rm secret.key
+files_touched_est: 1
