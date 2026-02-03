@@ -24,6 +24,11 @@ DEMO_SCOPE_DIFF="${DEMO_SCOPE_DIFF:-$DOCS/demo_scope_mismatch_diff.patch}"
 # (compat) single-file output
 DEMO_SCOPE="${DEMO_SCOPE:-$DOCS/demo_scope_mismatch.txt}"
 
+# Deny-glob lock artifacts (before/after/diff)
+DEMO_DENYGLOB_BEFORE="${DEMO_DENYGLOB_BEFORE:-$DOCS/demo_deny_glob_before.txt}"
+DEMO_DENYGLOB_AFTER="${DEMO_DENYGLOB_AFTER:-$DOCS/demo_deny_glob_after.txt}"
+DEMO_DENYGLOB_DIFF="${DEMO_DENYGLOB_DIFF:-$DOCS/demo_deny_glob_diff.patch}"
+
 AUDIT="${AUDIT:-audit.jsonl}"
 
 # -----------------------------
@@ -173,3 +178,61 @@ assert_file_contains "Classification: SCOPE_MISMATCH" "$DEMO_SCOPE_AFTER"
 assert_file_contains "did not influence the denial" "$DEMO_SCOPE_AFTER"
 
 echo "OK: scope-mismatch before/after artifacts + diff regenerated and assertions passed"
+
+# -----------------------------
+# CASE 3: DENY_GLOB_LOCK (baseline + current + diff)
+# -----------------------------
+
+# Create a protected file inside the sandbox.
+echo "secret" > "$SANDBOX/secret.pem"
+
+# Create (or reuse) a stable IR (valid + scoped) so this scenario tests *deny-glob*, not IR validity.
+IR_DENYGLOB_PATH="$TMPDIR_REPO/IR_DENY_GLOB.md"
+
+needs_regen=0
+if [[ ! -f "$IR_DENYGLOB_PATH" ]]; then
+  needs_regen=1
+elif ! grep -q '^signature:' "$IR_DENYGLOB_PATH"; then
+  needs_regen=1
+elif ! grep -q '^root:' "$IR_DENYGLOB_PATH"; then
+  needs_regen=1
+fi
+
+if [[ "$needs_regen" -eq 1 ]]; then
+  run_ir new \
+    --root "$SANDBOX" \
+    --actions delete \
+    --note "deny-glob lock demo (attempt delete of protected *.pem)" \
+    --out "$IR_DENYGLOB_PATH" >/dev/null
+fi
+
+# BEFORE (baseline): create once if missing
+if [[ ! -f "$DEMO_DENYGLOB_BEFORE" ]]; then
+  set +e
+  run_gate --dry-run --print-decision --intent "$IR_DENYGLOB_PATH" -- rm secret.pem 2>&1 \
+    | sanitize \
+    | tee "$DEMO_DENYGLOB_BEFORE" >/dev/null
+  true
+  set -e
+fi
+
+# AFTER: always regenerate
+set +e
+run_gate --dry-run --print-decision --intent "$IR_DENYGLOB_PATH" -- rm secret.pem 2>&1 \
+  | sanitize \
+  | tee "$DEMO_DENYGLOB_AFTER" >/dev/null
+true
+set -e
+
+# Diff for deny-glob lock
+diff -u \
+  --label "$(basename "$DEMO_DENYGLOB_BEFORE")" "$DEMO_DENYGLOB_BEFORE" \
+  --label "$(basename "$DEMO_DENYGLOB_AFTER")"  "$DEMO_DENYGLOB_AFTER" \
+  > "$DEMO_DENYGLOB_DIFF" || true
+
+# Assertions on deny-glob AFTER
+assert_file_contains "DENY: argument 'secret.pem' matches deny_glob" "$DEMO_DENYGLOB_AFTER"
+assert_file_contains "Denial Context Snapshot" "$DEMO_DENYGLOB_AFTER"
+assert_file_contains "did not influence the denial" "$DEMO_DENYGLOB_AFTER"
+
+echo "OK: deny-glob lock before/after artifacts + diff regenerated and assertions passed"
