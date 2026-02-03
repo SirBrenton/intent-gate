@@ -13,21 +13,25 @@ SANDBOX="${SANDBOX:-sandbox}"
 DOCS="${DOCS:-docs}"
 TMPDIR_REPO="${TMPDIR_REPO:-tmp}"
 
+# -----------------------------
+# Evidence artifact paths
+# -----------------------------
+# CASE 1: Missing intent
 DEMO_BEFORE="${DEMO_BEFORE:-$DOCS/demo_before_denial.txt}"
 DEMO_AFTER="${DEMO_AFTER:-$DOCS/demo_after_denial.txt}"
 DEMO_DIFF="${DEMO_DIFF:-$DOCS/demo_denial_diff.patch}"
 
-# Scope-mismatch artifacts (before/after/diff)
+# CASE 2: Scope mismatch
 DEMO_SCOPE_BEFORE="${DEMO_SCOPE_BEFORE:-$DOCS/demo_scope_mismatch_before.txt}"
 DEMO_SCOPE_AFTER="${DEMO_SCOPE_AFTER:-$DOCS/demo_scope_mismatch_after.txt}"
 DEMO_SCOPE_DIFF="${DEMO_SCOPE_DIFF:-$DOCS/demo_scope_mismatch_diff.patch}"
-# (compat) single-file output
-DEMO_SCOPE="${DEMO_SCOPE:-$DOCS/demo_scope_mismatch.txt}"
+DEMO_SCOPE="${DEMO_SCOPE:-$DOCS/demo_scope_mismatch.txt}" # compat single-file
 
-# Deny-glob lock artifacts (before/after/diff)
-DEMO_DENYGLOB_BEFORE="${DEMO_DENYGLOB_BEFORE:-$DOCS/demo_deny_glob_before.txt}"
-DEMO_DENYGLOB_AFTER="${DEMO_DENYGLOB_AFTER:-$DOCS/demo_deny_glob_after.txt}"
-DEMO_DENYGLOB_DIFF="${DEMO_DENYGLOB_DIFF:-$DOCS/demo_deny_glob_diff.patch}"
+# CASE 3: Deny-glob lock
+DEMO_DG_BEFORE="${DEMO_DG_BEFORE:-$DOCS/demo_deny_glob_before.txt}"
+DEMO_DG_AFTER="${DEMO_DG_AFTER:-$DOCS/demo_deny_glob_after.txt}"
+DEMO_DG_DIFF="${DEMO_DG_DIFF:-$DOCS/demo_deny_glob_diff.patch}"
+DEMO_DG="${DEMO_DG:-$DOCS/demo_deny_glob.txt}" # optional compat single-file (ok if you don't commit it)
 
 AUDIT="${AUDIT:-audit.jsonl}"
 
@@ -36,20 +40,10 @@ AUDIT="${AUDIT:-audit.jsonl}"
 # -----------------------------
 die() { echo "FATAL: $*" >&2; exit 2; }
 
-run_gate() {
-  "$PY" ./src/intent_gate.py "$@"
-}
-
-run_ir() {
-  "$PY" ./src/ir_tool.py "$@"
-}
+run_gate() { "$PY" ./src/intent_gate.py "$@"; }
+run_ir()   { "$PY" ./src/ir_tool.py "$@"; }
 
 sanitize() {
-  # Normalize machine-specific and run-specific bits so artifacts don't churn.
-  # - timestamps
-  # - absolute paths
-  # - /tmp vs /private/tmp
-  # - IR filenames with timestamps
   sed -E \
     -e 's/"ts_utc":[[:space:]]*"[^"]+"/"ts_utc": "REDACTED"/g' \
     -e 's#(/Users/)[^" ]+#\1REDACTED#g' \
@@ -87,32 +81,25 @@ echo "hello" > "$SANDBOX/foo.txt"
 # -----------------------------
 # CASE 1: MISSING_INTENT (baseline + current + diff)
 # -----------------------------
-
-# BEFORE (baseline): keep committed artifact unless missing
 if [[ ! -f "$DEMO_BEFORE" ]]; then
   set +e
   run_gate --dry-run --print-decision -- rm foo.txt 2>&1 \
-    | sanitize \
-    | tee "$DEMO_BEFORE" >/dev/null
+    | sanitize | tee "$DEMO_BEFORE" >/dev/null
   true
   set -e
 fi
 
-# AFTER: always regenerate
 set +e
 run_gate --dry-run --print-decision -- rm foo.txt 2>&1 \
-  | sanitize \
-  | tee "$DEMO_AFTER" >/dev/null
+  | sanitize | tee "$DEMO_AFTER" >/dev/null
 true
 set -e
 
-# Diff (deterministic because both are sanitized)
 diff -u \
   --label "$(basename "$DEMO_BEFORE")" "$DEMO_BEFORE" \
   --label "$(basename "$DEMO_AFTER")"  "$DEMO_AFTER" \
   > "$DEMO_DIFF" || true
 
-# Assertions on AFTER
 assert_file_contains "Denial Context Snapshot" "$DEMO_AFTER"
 assert_file_contains "did not influence the denial" "$DEMO_AFTER"
 assert_file_not_contains "DENY: DENY:" "$DEMO_AFTER"
@@ -122,8 +109,6 @@ echo "OK: denial before/after artifacts + diff regenerated and assertions passed
 # -----------------------------
 # CASE 2: SCOPE_MISMATCH (baseline + current + diff)
 # -----------------------------
-
-# Create (or reuse) a stable "bad" IR on disk so the transcript is reproducible.
 IR_BAD_PATH="$TMPDIR_REPO/IR_SCOPE_MISMATCH.md"
 
 needs_regen=0
@@ -136,7 +121,6 @@ elif ! grep -q '^root:' "$IR_BAD_PATH"; then
 fi
 
 if [[ "$needs_regen" -eq 1 ]]; then
-  # Ensure we write an actual IR file to the stable path.
   run_ir new \
     --root /tmp \
     --actions delete \
@@ -144,34 +128,27 @@ if [[ "$needs_regen" -eq 1 ]]; then
     --out "$IR_BAD_PATH" >/dev/null
 fi
 
-# BEFORE (baseline): create once if missing
 if [[ ! -f "$DEMO_SCOPE_BEFORE" ]]; then
   set +e
   run_gate --dry-run --print-decision --intent "$IR_BAD_PATH" -- rm foo.txt 2>&1 \
-    | sanitize \
-    | tee "$DEMO_SCOPE_BEFORE" >/dev/null
+    | sanitize | tee "$DEMO_SCOPE_BEFORE" >/dev/null
   true
   set -e
 fi
 
-# AFTER: always regenerate
 set +e
 run_gate --dry-run --print-decision --intent "$IR_BAD_PATH" -- rm foo.txt 2>&1 \
-  | sanitize \
-  | tee "$DEMO_SCOPE_AFTER" >/dev/null
+  | sanitize | tee "$DEMO_SCOPE_AFTER" >/dev/null
 true
 set -e
 
-# Optional compat artifact (keep older filename around)
 cp "$DEMO_SCOPE_AFTER" "$DEMO_SCOPE"
 
-# Diff for scope mismatch
 diff -u \
   --label "$(basename "$DEMO_SCOPE_BEFORE")" "$DEMO_SCOPE_BEFORE" \
   --label "$(basename "$DEMO_SCOPE_AFTER")"  "$DEMO_SCOPE_AFTER" \
   > "$DEMO_SCOPE_DIFF" || true
 
-# Assertions on scope-mismatch AFTER
 assert_file_contains "DENY: scope.root mismatch" "$DEMO_SCOPE_AFTER"
 assert_file_contains "Denial Context Snapshot" "$DEMO_SCOPE_AFTER"
 assert_file_contains "Classification: SCOPE_MISMATCH" "$DEMO_SCOPE_AFTER"
@@ -182,57 +159,39 @@ echo "OK: scope-mismatch before/after artifacts + diff regenerated and assertion
 # -----------------------------
 # CASE 3: DENY_GLOB_LOCK (baseline + current + diff)
 # -----------------------------
-
-# Create a protected file inside the sandbox.
+rm -f "$SANDBOX/secret.pem"
 echo "secret" > "$SANDBOX/secret.pem"
 
-# Create (or reuse) a stable IR (valid + scoped) so this scenario tests *deny-glob*, not IR validity.
-IR_DENYGLOB_PATH="$TMPDIR_REPO/IR_DENY_GLOB.md"
+IR_DG="$TMPDIR_REPO/IR_DENY_GLOB_LOCK.md"
+run_ir new \
+  --root "$SANDBOX" \
+  --actions delete \
+  --note "test deny-glob lock" \
+  --out "$IR_DG" >/dev/null
 
-needs_regen=0
-if [[ ! -f "$IR_DENYGLOB_PATH" ]]; then
-  needs_regen=1
-elif ! grep -q '^signature:' "$IR_DENYGLOB_PATH"; then
-  needs_regen=1
-elif ! grep -q '^root:' "$IR_DENYGLOB_PATH"; then
-  needs_regen=1
-fi
-
-if [[ "$needs_regen" -eq 1 ]]; then
-  run_ir new \
-    --root "$SANDBOX" \
-    --actions delete \
-    --note "deny-glob lock demo (attempt delete of protected *.pem)" \
-    --out "$IR_DENYGLOB_PATH" >/dev/null
-fi
-
-# BEFORE (baseline): create once if missing
-if [[ ! -f "$DEMO_DENYGLOB_BEFORE" ]]; then
+if [[ ! -f "$DEMO_DG_BEFORE" ]]; then
   set +e
-  run_gate --dry-run --print-decision --intent "$IR_DENYGLOB_PATH" -- rm secret.pem 2>&1 \
-    | sanitize \
-    | tee "$DEMO_DENYGLOB_BEFORE" >/dev/null
+  run_gate --dry-run --print-decision --intent "$IR_DG" -- rm secret.pem 2>&1 \
+    | sanitize | tee "$DEMO_DG_BEFORE" >/dev/null
   true
   set -e
 fi
 
-# AFTER: always regenerate
 set +e
-run_gate --dry-run --print-decision --intent "$IR_DENYGLOB_PATH" -- rm secret.pem 2>&1 \
-  | sanitize \
-  | tee "$DEMO_DENYGLOB_AFTER" >/dev/null
+run_gate --dry-run --print-decision --intent "$IR_DG" -- rm secret.pem 2>&1 \
+  | sanitize | tee "$DEMO_DG_AFTER" >/dev/null
 true
 set -e
 
-# Diff for deny-glob lock
-diff -u \
-  --label "$(basename "$DEMO_DENYGLOB_BEFORE")" "$DEMO_DENYGLOB_BEFORE" \
-  --label "$(basename "$DEMO_DENYGLOB_AFTER")"  "$DEMO_DENYGLOB_AFTER" \
-  > "$DEMO_DENYGLOB_DIFF" || true
+# Optional compat file (harmless; you can choose to not commit it)
+cp "$DEMO_DG_AFTER" "$DEMO_DG" 2>/dev/null || true
 
-# Assertions on deny-glob AFTER
-assert_file_contains "DENY: argument 'secret.pem' matches deny_glob" "$DEMO_DENYGLOB_AFTER"
-assert_file_contains "Denial Context Snapshot" "$DEMO_DENYGLOB_AFTER"
-assert_file_contains "did not influence the denial" "$DEMO_DENYGLOB_AFTER"
+diff -u \
+  --label "$(basename "$DEMO_DG_BEFORE")" "$DEMO_DG_BEFORE" \
+  --label "$(basename "$DEMO_DG_AFTER")"  "$DEMO_DG_AFTER" \
+  > "$DEMO_DG_DIFF" || true
+
+assert_file_contains "DENY: argument 'secret.pem' matches deny_glob" "$DEMO_DG_AFTER"
+assert_file_contains "Denial Context Snapshot" "$DEMO_DG_AFTER"
 
 echo "OK: deny-glob lock before/after artifacts + diff regenerated and assertions passed"
