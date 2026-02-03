@@ -61,6 +61,7 @@ demo:
 	fi
 	rm -f audit.jsonl
 	mkdir -p "$(SANDBOX)"
+	rm -rf -- "$(SANDBOX)"/*
 	echo "hello" > "$(SANDBOX)/foo.txt"
 	IR="$$( $(IR_TOOL) new --root "$(SANDBOX)" --actions delete --note "delete foo.txt in sandbox" )"
 	echo
