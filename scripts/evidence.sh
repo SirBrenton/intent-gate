@@ -195,3 +195,68 @@ assert_file_contains "DENY: argument 'secret.pem' matches deny_glob" "$DEMO_DG_A
 assert_file_contains "Denial Context Snapshot" "$DEMO_DG_AFTER"
 
 echo "OK: deny-glob lock before/after artifacts + diff regenerated and assertions passed"
+
+# -----------------------------
+# CASE 4: DENY_GLOB (*.key) (baseline + current + diff)
+# -----------------------------
+
+DEMO_DG_KEY_BEFORE="${DEMO_DG_KEY_BEFORE:-$DOCS/demo_deny_glob_key_before.txt}"
+DEMO_DG_KEY_AFTER="${DEMO_DG_KEY_AFTER:-$DOCS/demo_deny_glob_key_after.txt}"
+DEMO_DG_KEY_DIFF="${DEMO_DG_KEY_DIFF:-$DOCS/demo_deny_glob_key_diff.patch}"
+
+# Create (or reuse) a stable *valid* IR scoped to the sandbox.
+# This ensures the denial is due to deny_glob, not signature/root/expiry issues.
+IR_DG_PATH="$TMPDIR_REPO/IR_DENY_GLOB.md"
+
+needs_regen=0
+if [[ ! -f "$IR_DG_PATH" ]]; then
+  needs_regen=1
+elif ! grep -q '^signature:' "$IR_DG_PATH"; then
+  needs_regen=1
+elif ! grep -q '^root:' "$IR_DG_PATH"; then
+  needs_regen=1
+fi
+
+if [[ "$needs_regen" -eq 1 ]]; then
+  run_ir new \
+    --root "$SANDBOX" \
+    --actions delete \
+    --note "deny-glob lock demo (sandbox-scoped delete)" \
+    --out "$IR_DG_PATH" >/dev/null
+fi
+
+# Prepare a protected file that should be blocked by deny_glob defaults
+echo "secret" > "$SANDBOX/secret.key"
+
+# BEFORE (baseline): create once if missing
+if [[ ! -f "$DEMO_DG_KEY_BEFORE" ]]; then
+  set +e
+  run_gate --dry-run --print-decision --intent "$IR_DG_PATH" -- rm secret.key 2>&1 \
+    | sanitize \
+    | tee "$DEMO_DG_KEY_BEFORE" >/dev/null
+  true
+  set -e
+fi
+
+# AFTER: always regenerate
+set +e
+run_gate --dry-run --print-decision --intent "$IR_DG_PATH" -- rm secret.key 2>&1 \
+  | sanitize \
+  | tee "$DEMO_DG_KEY_AFTER" >/dev/null
+true
+set -e
+
+# Diff (deterministic because both are sanitized)
+diff -u \
+  --label "$(basename "$DEMO_DG_KEY_BEFORE")" "$DEMO_DG_KEY_BEFORE" \
+  --label "$(basename "$DEMO_DG_KEY_AFTER")"  "$DEMO_DG_KEY_AFTER" \
+  > "$DEMO_DG_KEY_DIFF" || true
+
+# Assertions on AFTER
+assert_file_contains "DENY:" "$DEMO_DG_KEY_AFTER"
+assert_file_contains "matches deny_glob" "$DEMO_DG_KEY_AFTER"
+assert_file_contains "Denial Context Snapshot" "$DEMO_DG_KEY_AFTER"
+assert_file_contains "Classification: DENY_GLOB_MATCH" "$DEMO_DG_KEY_AFTER"
+assert_file_contains "did not influence the denial" "$DEMO_DG_KEY_AFTER"
+
+echo "OK: deny-glob (*.key) lock before/after artifacts + diff regenerated and assertions passed"
