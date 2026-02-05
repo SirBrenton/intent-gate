@@ -169,3 +169,32 @@ def test_deny_deny_glob_match(tmp_path: Path):
 
     assert d.allowed is False
     assert "matches deny_glob" in d.reason
+
+def test_deny_symlink_escape_write_like(tmp_path: Path):
+    # Policy + sandbox
+    policy_path = tmp_path / "policy.yaml"
+    write_policy(policy_path)
+    policy = yaml.safe_load(policy_path.read_text())
+    sandbox_root = tmp_path / "sandbox"
+    sandbox_root.mkdir()
+
+    # Victim outside sandbox
+    victim = tmp_path / "victim.txt"
+    victim.write_text("TOP_SECRET", encoding="utf-8")
+
+    # Symlink inside sandbox -> outside victim
+    link = sandbox_root / "link_to_victim.txt"
+    link.symlink_to(victim)
+
+    # Intent allows write_over_existing so truncate is allowed *in principle*
+    ir_path = tmp_path / "IR.md"
+    write_ir(ir_path, sandbox_root, actions=["write_over_existing"])
+    ir = _parse_intent_record_md(ir_path)
+
+    # Attempt write-like mutation through symlink should be denied
+    d = decide(["truncate", "-s", "0", "link_to_victim.txt"], policy, ir, sandbox_root)
+    assert d.allowed is False
+    assert "symlink escape" in d.reason or "resolves outside sandbox" in d.reason
+
+    # Victim should remain unchanged
+    assert victim.read_text(encoding="utf-8") == "TOP_SECRET"
