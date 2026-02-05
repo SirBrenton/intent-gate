@@ -225,3 +225,4 @@ audit/docs/demo_denial_diff.patch
 tmp/
 audit.jsonl
 
+victim.txt
