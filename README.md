@@ -14,6 +14,21 @@ V1 is intentionally small:
 - Python 3 (tested with a local `.venv`)
 - **GNU Make ≥ 3.82** (macOS `/usr/bin/make` is 3.81 and will fail)
 
+## Proof in 30 seconds
+
+```bash
+./makew test
+./makew evidence
+./makew demo
+```
+
+**What this proves** (deterministic artifacts in docs/):
+-	Missing Intent Record → DENY
+- Scope mismatch (IR root ≠ sandbox) → DENY
+- Deny-glob protected secret (*.pem) → DENY
+- Deny-glob protected secret (*.key) → DENY
+- Symlink escape on write-like mutations (truncate via sandbox symlink) → DENY
+
 Use the repo wrapper:
 
 ```bash
@@ -68,6 +83,16 @@ The gate composes policy defaults with per-Intent Record constraints.
 - `max_files` comes from the IR **when present**; otherwise the policy default applies
 
 It then makes a deterministic allow/deny decision.
+
+### Policy defaults (V1)
+
+By default, the gate denies mutation of common sensitive targets even with a valid IR:
+
+- `**/.git/**`
+- `**/*.key`
+- `**/*.pem`
+
+(These are enforced via `deny_globs_default` in `policies/policy.yaml` and unioned with any IR-provided deny globs.)
 
 ### A) Intent Record (IR)
 
@@ -180,13 +205,14 @@ Scope-mismatch denial
 - docs/demo_scope_mismatch_diff.patch (sanitized diff; deterministic)
 - docs/demo_scope_mismatch.txt (compat: copy of scope-mismatch “after”)
 
-Deny-glob lock denial (policy-protected targets)
+### Deny-glob lock (policy-protected targets)
 
-Demonstrates that protected globs (e.g., **/*.pem) remain non-deletable by default even with a valid Intent Record.
+Even with a valid IR, deny-globs block protected paths:
+`**/*.pem`, `**/*.key`, `**/.git/**`
 
-- docs/demo_deny_glob_before.txt (baseline; created only if missing)
-- docs/demo_deny_glob_after.txt (current run)
-- docs/demo_deny_glob_diff.patch (sanitized diff; deterministic)
+Artifacts:
+- `docs/demo_deny_glob_*` (pem)
+- `docs/demo_deny_glob_key_*` (key)
 
 ### `make demo` runs three scenarios:
 
