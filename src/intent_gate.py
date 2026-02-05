@@ -8,6 +8,7 @@ A minimal "refusal boundary" for agentic execution:
 - Require a signed Intent Record for destructive/mutating commands.
 - Enforce scope root, expiry, deny_globs, max_files.
 - Forbid absolute paths and "double-sandbox" path mistakes.
+- Guard against symlink escapes for write-like mutations.
 
 This is not a sandbox. It's an execution gate + audit trail.
 """
@@ -47,9 +48,27 @@ class GateDecision:
 # Helpers
 # -----------------------------
 
+def _resolves_outside_sandbox(arg: str, sandbox_root: Path) -> bool:
+    """
+    Returns True if (sandbox_root / arg) resolves (following symlinks) outside sandbox_root.
+
+    This is the critical guard against "symlink escape" where a path *appears* inside
+    the sandbox but dereferences to a target outside it.
+    """
+    try:
+        sandbox_abs = sandbox_root.resolve()
+        resolved = (sandbox_abs / arg).resolve()  # follows symlinks
+        # Path.is_relative_to exists on Py3.9+
+        return not resolved.is_relative_to(sandbox_abs)
+    except Exception:
+        # Fail closed on weird paths / resolution errors
+        return True
+
+
 def _strip_prefix(reason: str, prefix: str) -> str:
     r = (reason or "").strip()
     return r[len(prefix):].lstrip() if r.startswith(prefix) else r
+
 
 def _denial_context_snapshot(reason: str) -> Dict[str, Any]:
     r = (reason or "").strip()
@@ -81,6 +100,15 @@ def _denial_context_snapshot(reason: str) -> Dict[str, Any]:
         confidence = 0.85
         evidence = {"category": "constraints", "basis": "deny_glob_match"}
 
+    elif "symlink escape" in r or "resolves outside sandbox" in r:
+        summary = (
+            "Write-like mutation would follow a symlink inside the sandbox to a target outside it. "
+            "Blocked to prevent cross-boundary filesystem mutation."
+        )
+        classification = "SYMLINK_ESCAPE"
+        confidence = 0.90
+        evidence = {"category": "scope", "basis": "symlink_resolution_escape"}
+
     else:
         summary = (
             "Refusal boundary triggered. Review the denial reason and provide a properly "
@@ -97,6 +125,7 @@ def _denial_context_snapshot(reason: str) -> Dict[str, Any]:
         "evidence": evidence,
         "note": "Note: This context did not influence the denial. It is explanatory only.",
     }
+
 
 def _iso_utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -165,7 +194,6 @@ def _parse_intent_record_md(path: Path) -> Dict[str, Any]:
             constraints = fm.get("constraints") or {}
 
             def _as_str(x: Any) -> str:
-                # yaml.safe_load may return non-strings (e.g., datetime); normalize safely.
                 if x is None:
                     return ""
                 return str(x).strip()
@@ -213,7 +241,7 @@ def _parse_intent_record_md(path: Path) -> Dict[str, Any]:
 
     def find_list_after(header: str) -> List[str]:
         lines = text.splitlines()
-        out: List[str] = [] 
+        out: List[str] = []
         in_block = False
         for line in lines:
             if re.match(rf"^\s*##\s+{re.escape(header)}\s*$", line):
@@ -270,11 +298,9 @@ def _match_any_glob(path_str: str, globs: List[str]) -> bool:
     for g in globs:
         gg = (g or "").replace("\\", "/").strip()
 
-        # direct match (normal case)
         if fnmatch.fnmatch(s, gg):
             return True
 
-        # gitignore-ish: '**/X' should also match 'X' at root
         if gg.startswith("**/"):
             tail = gg[3:]
             if fnmatch.fnmatch(s, tail) or fnmatch.fnmatch(base, tail):
@@ -331,7 +357,7 @@ def decide(
     if action_class == "unknown":
         return GateDecision(False, f"DENY: unknown command '{cmd0}' (default deny).", normalized)
 
-    # 2) Read-only -> allow (classification already enforced policy membership)
+    # 2) Read-only -> allow
     if action_class == "read_only":
         return GateDecision(True, "ALLOW: read-only command permitted by policy.", normalized)
 
@@ -373,6 +399,27 @@ def decide(
                 return GateDecision(
                     False,
                     "DENY: do not prefix paths with 'sandbox/' (cwd is already sandbox root). Use relative paths.",
+                    normalized,
+                    files_touched=touched,
+                )
+
+        # --- Symlink escape guard (write-like mutations) ---
+        #
+        # rm unlinks the symlink itself (does not mutate the target), so we do NOT apply this to rm.
+        # But truncate/sed/cp can follow symlinks and mutate targets outside sandbox.
+        if cmd0 in {"truncate", "sed", "cp"}:
+            # Heuristic: treat the *last non-flag argument* as the write target.
+            target = None
+            for tok in reversed(cmd[1:]):
+                if tok.startswith("-"):
+                    continue
+                target = tok
+                break
+
+            if target and _resolves_outside_sandbox(target, sandbox_root):
+                return GateDecision(
+                    False,
+                    f"DENY: path '{target}' resolves outside sandbox (symlink escape).",
                     normalized,
                     files_touched=touched,
                 )
@@ -471,7 +518,6 @@ def decide(
 
         return GateDecision(True, "ALLOW: Intent Record validated for mutating command.", normalized, files_touched=touched)
 
-    # Defensive fallback (should be unreachable)
     return GateDecision(False, f"DENY: command '{cmd0}' not allowed by policy.", normalized)
 
 
@@ -558,7 +604,7 @@ def main() -> int:
         reason = _strip_prefix(decision.reason, "DENY:")
         print(f"DENY: {reason}", file=sys.stderr)
 
-        snap = _denial_context_snapshot()
+        snap = _denial_context_snapshot(decision.reason)  # <-- FIXED (was missing arg)
         print("Denial Context Snapshot:", file=sys.stderr)
         print(f"- Classification: {snap['classification']} (confidence {snap['confidence']:.2f})", file=sys.stderr)
         print(f"- Summary: {snap['summary']}", file=sys.stderr)
@@ -568,7 +614,6 @@ def main() -> int:
 
         print(f"cmd: {decision.normalized_command}", file=sys.stderr)
         return 2
-
 
     # Execute
     rc, out, err = run_command(cmd, sandbox_root)
@@ -586,7 +631,6 @@ def main() -> int:
             "returncode": rc,
             "stdout_preview": _preview(out),
             "stderr_preview": _preview(err),
-            # forensic context
             "policy": str(policy_path),
             "intent_path": str(Path(args.intent).resolve()) if args.intent else None,
             "sandbox_root": str(sandbox_root),
@@ -599,6 +643,7 @@ def main() -> int:
     if err:
         sys.stderr.write(err)
     return rc
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
