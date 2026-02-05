@@ -1,0 +1,8 @@
+DENY: path 'link_to_victim.txt' resolves outside sandbox (symlink escape).
+Denial Context Snapshot:
+- Classification: SYMLINK_ESCAPE (confidence 0.90)
+- Summary: Write-like mutation would follow a symlink inside the sandbox to a target outside it. Blocked to prevent cross-boundary filesystem mutation.
+- Evidence: category=scope; basis=symlink_resolution_escape
+Note: This context did not influence the denial. It is explanatory only.
+cmd: truncate -s 0 link_to_victim.txt
+files_touched_est: 1
