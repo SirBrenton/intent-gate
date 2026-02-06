@@ -17,9 +17,17 @@ def write_policy(p: Path):
     p.write_text(yaml.safe_dump(policy), encoding="utf-8")
 
 
-def write_ir(p: Path, sandbox_root: Path, actions=None, deny_globs=None, max_files=20, expires="2099-01-01T00:00:00-08:00"):
+def write_ir(
+    p: Path,
+    sandbox_root: Path,
+    actions=None,
+    deny_globs=None,
+    max_files=20,
+    expires="2099-01-01T00:00:00-08:00",
+):
     actions = actions or ["delete", "write_over_existing", "move_or_rename", "copy"]
     deny_globs = deny_globs or ["**/.git/**", "**/*.key", "**/*.pem"]
+
     md = f"""\
 # Intent Record
 
@@ -49,6 +57,7 @@ def test_default_deny_unknown(tmp_path: Path):
     policy_path = tmp_path / "policy.yaml"
     write_policy(policy_path)
     policy = yaml.safe_load(policy_path.read_text())
+
     sandbox_root = tmp_path / "sandbox"
     sandbox_root.mkdir()
 
@@ -61,6 +70,7 @@ def test_allow_read_only_ls(tmp_path: Path):
     policy_path = tmp_path / "policy.yaml"
     write_policy(policy_path)
     policy = yaml.safe_load(policy_path.read_text())
+
     sandbox_root = tmp_path / "sandbox"
     sandbox_root.mkdir()
 
@@ -72,6 +82,7 @@ def test_deny_mutating_without_intent(tmp_path: Path):
     policy_path = tmp_path / "policy.yaml"
     write_policy(policy_path)
     policy = yaml.safe_load(policy_path.read_text())
+
     sandbox_root = tmp_path / "sandbox"
     sandbox_root.mkdir()
 
@@ -133,6 +144,7 @@ def test_deny_action_not_allowed(tmp_path: Path):
     assert d.allowed is False
     assert "does not allow action 'delete'" in d.reason
 
+
 def test_deny_glob_match_blocks_delete_at_root(tmp_path: Path):
     policy_path = tmp_path / "policy.yaml"
     write_policy(policy_path)
@@ -142,14 +154,22 @@ def test_deny_glob_match_blocks_delete_at_root(tmp_path: Path):
     sandbox_root.mkdir()
     (sandbox_root / "secret.pem").write_text("secret", encoding="utf-8")
 
+    # Prove policy globs apply even if IR deny_globs is empty
     ir_path = tmp_path / "IR.md"
-    write_ir(ir_path, sandbox_root, actions=["delete"], deny_globs=[])  # prove policy globs work
+    write_ir(ir_path, sandbox_root, actions=["delete"], deny_globs=[])
     ir = _parse_intent_record_md(ir_path)
 
     d = decide(["rm", "secret.pem"], policy, ir, sandbox_root)
     assert d.allowed is False
+    assert "matches deny_glob" in d.reason
 
-def test_deny_deny_glob_match(tmp_path: Path):
+
+def test_deny_glob_blocks_symlink_target(tmp_path: Path):
+    """
+    Symlink bypass lock:
+    If a path inside the sandbox is a symlink to a deny-globbed target (e.g. *.pem),
+    the gate must DENY the mutating command.
+    """
     policy_path = tmp_path / "policy.yaml"
     write_policy(policy_path)
     policy = yaml.safe_load(policy_path.read_text())
@@ -157,73 +177,85 @@ def test_deny_deny_glob_match(tmp_path: Path):
     sandbox_root = tmp_path / "sandbox"
     sandbox_root.mkdir()
 
-    # Create a file that matches a default deny_glob
-    (sandbox_root / "secret.pem").write_text("top secret", encoding="utf-8")
+    (sandbox_root / "secret.pem").write_text("secret", encoding="utf-8")
 
-    # Create an otherwise-valid Intent Record that WOULD allow delete
+    (sandbox_root / "link").mkdir()
+    (sandbox_root / "link" / "target").symlink_to(Path("../secret.pem"))
+
     ir_path = tmp_path / "IR.md"
     write_ir(ir_path, sandbox_root, actions=["delete"])
     ir = _parse_intent_record_md(ir_path)
 
-    d = decide(["rm", "secret.pem"], policy, ir, sandbox_root)
-
+    d = decide(["rm", "link/target"], policy, ir, sandbox_root)
     assert d.allowed is False
-    assert "matches deny_glob" in d.reason
+    assert "deny_glob" in d.reason.lower()
 
-def test_deny_symlink_escape_write_like(tmp_path: Path):
-    # Policy + sandbox
+
+def test_deny_mutation_when_path_escapes_sandbox_via_dotdot(tmp_path: Path):
     policy_path = tmp_path / "policy.yaml"
     write_policy(policy_path)
     policy = yaml.safe_load(policy_path.read_text())
+
     sandbox_root = tmp_path / "sandbox"
     sandbox_root.mkdir()
 
-    # Victim outside sandbox
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x", encoding="utf-8")
+
+    ir_path = tmp_path / "IR.md"
+    write_ir(ir_path, sandbox_root, actions=["delete"])
+    ir = _parse_intent_record_md(ir_path)
+
+    d = decide(["rm", "../outside.txt"], policy, ir, sandbox_root)
+    assert d.allowed is False
+    assert "escapes sandbox" in d.reason.lower()
+
+
+def test_deny_symlink_that_points_outside_sandbox(tmp_path: Path):
+    policy_path = tmp_path / "policy.yaml"
+    write_policy(policy_path)
+    policy = yaml.safe_load(policy_path.read_text())
+
+    sandbox_root = tmp_path / "sandbox"
+    sandbox_root.mkdir()
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "x.pem").write_text("x", encoding="utf-8")
+
+    (sandbox_root / "link").mkdir()
+    (sandbox_root / "link" / "out").symlink_to(Path("../../outside/x.pem"))
+
+    ir_path = tmp_path / "IR.md"
+    write_ir(ir_path, sandbox_root, actions=["delete"])
+    ir = _parse_intent_record_md(ir_path)
+
+    d = decide(["rm", "link/out"], policy, ir, sandbox_root)
+    assert d.allowed is False
+    assert "escapes sandbox" in d.reason.lower()
+
+
+def test_deny_symlink_escape_write_like_truncate(tmp_path: Path):
+    policy_path = tmp_path / "policy.yaml"
+    write_policy(policy_path)
+    policy = yaml.safe_load(policy_path.read_text())
+
+    sandbox_root = tmp_path / "sandbox"
+    sandbox_root.mkdir()
+
     victim = tmp_path / "victim.txt"
     victim.write_text("TOP_SECRET", encoding="utf-8")
 
-    # Symlink inside sandbox -> outside victim
     link = sandbox_root / "link_to_victim.txt"
     link.symlink_to(victim)
 
-    # Intent allows write_over_existing so truncate is allowed *in principle*
     ir_path = tmp_path / "IR.md"
     write_ir(ir_path, sandbox_root, actions=["write_over_existing"])
     ir = _parse_intent_record_md(ir_path)
 
-    # Attempt write-like mutation through symlink should be denied
     d = decide(["truncate", "-s", "0", "link_to_victim.txt"], policy, ir, sandbox_root)
     assert d.allowed is False
-    assert "symlink escape" in d.reason or "resolves outside sandbox" in d.reason
+    assert "resolves outside sandbox" in d.reason.lower()
 
-    # Victim should remain unchanged
+    # confirm no mutation happened
     assert victim.read_text(encoding="utf-8") == "TOP_SECRET"
-
-    def test_deny_glob_blocks_symlink_target(tmp_path: Path):
-        """
-        Symlink bypass lock:
-        If a path inside the sandbox is a symlink to a deny-globbed target (e.g. *.pem),
-        the gate must DENY the mutating command.
-        """
-        policy_path = tmp_path / "policy.yaml"
-        write_policy(policy_path)
-        policy = yaml.safe_load(policy_path.read_text())
-
-        sandbox_root = tmp_path / "sandbox"
-        sandbox_root.mkdir()
-
-        # Real protected target
-        (sandbox_root / "secret.pem").write_text("secret", encoding="utf-8")
-
-        # Symlink inside sandbox pointing at protected target
-        link_dir = sandbox_root / "link"
-        link_dir.mkdir()
-        (link_dir / "target").symlink_to(Path("../secret.pem"))
-
-        ir_path = tmp_path / "IR.md"
-        write_ir(ir_path, sandbox_root, actions=["delete"])
-        ir = _parse_intent_record_md(ir_path)
-
-        d = decide(["rm", "link/target"], policy, ir, sandbox_root)
-        assert d.allowed is False
-        assert "matches deny_glob" in d.reason

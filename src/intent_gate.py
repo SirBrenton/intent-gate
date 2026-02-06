@@ -500,26 +500,48 @@ def decide(
                 files_touched=touched,
             )
 
+        sandbox_abs = sandbox_root.resolve()
+
+        def _deny_escape(arg: str, resolved: Path) -> GateDecision:
+            return GateDecision(
+                False,
+                f"DENY: path '{arg}' escapes sandbox (resolves to {resolved}).",
+                normalized,
+                files_touched=touched,
+            )
+
+        def _deny_glob(arg: str, rel_resolved: str) -> GateDecision:
+            return GateDecision(
+                False,
+                f"DENY: path '{arg}' resolves to '{rel_resolved}' which matches deny_glob.",
+                normalized,
+                files_touched=touched,
+            )
+
         for a in cmd[1:]:
             if a.startswith("-"):
                 continue
+
+            # Resolve arg under sandbox (follows symlinks and normalizes '..')
             p = (sandbox_root / a).resolve()
+
+            # 1) Hard guard: deny any resolved target outside sandbox (.. or symlink escape)
             try:
-                rel = p.relative_to(sandbox_root.resolve()).as_posix()
+                rel_path = p.relative_to(sandbox_abs).as_posix()
             except Exception:
-                rel = p.as_posix()
-            if _match_any_glob(rel, deny_globs_list):
-                return GateDecision(
-                    False,
-                    f"DENY: argument '{a}' matches deny_glob.",
-                    normalized,
-                    files_touched=touched,
-                )
+                return _deny_escape(a, p)
 
-        return GateDecision(True, "ALLOW: Intent Record validated for mutating command.", normalized, files_touched=touched)
+            # 2) Enforce deny-globs against the resolved-in-sandbox relative path
+            if _match_any_glob(rel_path, deny_globs_list):
+                return _deny_glob(a, rel_path)
 
-    return GateDecision(False, f"DENY: command '{cmd0}' not allowed by policy.", normalized)
-
+        return GateDecision(
+            True,
+            "ALLOW: Intent Record validated for mutating command.",
+            normalized,
+            files_touched=touched,
+        )
+    
 
 def run_command(cmd: List[str], cwd: Path) -> Tuple[int, str, str]:
     p = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
