@@ -198,3 +198,32 @@ def test_deny_symlink_escape_write_like(tmp_path: Path):
 
     # Victim should remain unchanged
     assert victim.read_text(encoding="utf-8") == "TOP_SECRET"
+
+    def test_deny_glob_blocks_symlink_target(tmp_path: Path):
+        """
+        Symlink bypass lock:
+        If a path inside the sandbox is a symlink to a deny-globbed target (e.g. *.pem),
+        the gate must DENY the mutating command.
+        """
+        policy_path = tmp_path / "policy.yaml"
+        write_policy(policy_path)
+        policy = yaml.safe_load(policy_path.read_text())
+
+        sandbox_root = tmp_path / "sandbox"
+        sandbox_root.mkdir()
+
+        # Real protected target
+        (sandbox_root / "secret.pem").write_text("secret", encoding="utf-8")
+
+        # Symlink inside sandbox pointing at protected target
+        link_dir = sandbox_root / "link"
+        link_dir.mkdir()
+        (link_dir / "target").symlink_to(Path("../secret.pem"))
+
+        ir_path = tmp_path / "IR.md"
+        write_ir(ir_path, sandbox_root, actions=["delete"])
+        ir = _parse_intent_record_md(ir_path)
+
+        d = decide(["rm", "link/target"], policy, ir, sandbox_root)
+        assert d.allowed is False
+        assert "matches deny_glob" in d.reason
