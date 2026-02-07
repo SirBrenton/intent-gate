@@ -61,6 +61,7 @@ This is about **inadmissibility**.
 [ ] Are execution events logged separately from decision events?  
 [ ] Does the log include: timestamp, command, scope, decision, result?  
 [ ] Is the audit trail append-only and tamper-resistant?
+[ ] Does each decision event include the policy + intent reference needed to reproduce the decision offline?
 
 **Failure mode:** no forensic trail after damage.
 
@@ -72,6 +73,7 @@ This is about **inadmissibility**.
 [ ] Are dangerous targets explicitly protected (`/`, `.`, `..`, system dirs)?  
 [ ] Are recursive or wildcard operations treated as higher risk?  
 [ ] Is there a hard upper bound on files affected?
+[ ] Are symlink/path traversal escapes prevented for write-like mutations (realpath containment enforced)?
 
 **Failure mode:** “technically allowed” catastrophic actions.
 
