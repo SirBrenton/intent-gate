@@ -73,6 +73,12 @@ A checkbox can be turned into an IR, but that's equivalent to issuing broad cred
 **"Isn't this just blockchain/consensus?"**  
 No. Blockchains solve multi-party consensus in adversarial networks. `intent-gate` solves a local refusal boundary: deterministic allow/deny + append-only audit for destructive commands. No consensus protocol, no network, no distributed state--just a local gate + append-only log.
 
+
+**“Doesn’t ‘intent’ become an impossible PM/philosophy burden?”**
+Only if intent is confused with prediction. Intent-gate does not ask humans to foresee all unknowns; it asks for a small set of explicit boundaries (especially around irreversibility and blast radius). Engineers own capability; humans state constraints; autonomy operates inside that envelope.
+
+See: `docs/narratives/intent_is_boundaries_not_predictions.md`
+
 ---
 
 ## 3) The Artifact
