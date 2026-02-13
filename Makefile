@@ -14,6 +14,7 @@ DEMO_BEFORE 	:= $(DOCS)/demo_before_denial.txt
 DEMO_AFTER 		:= $(DOCS)/demo_after_denial.txt
 DEMO_DIFF 		:= $(DOCS)/demo_denial_diff.patch
 DEMO_SCOPE 		:= $(DOCS)/demo_scope_mismatch.txt
+DEMO_WRONG_ROOT := $(DOCS)/demos/wrong_root/run.sh
 
 SHELL 			:= /bin/bash
 .ONESHELL:
@@ -31,6 +32,8 @@ help:
 	@echo "  make demo   - run the canonical intent-gate demo"
 	@echo "  make clean  - remove sandbox contents + __pycache__"
 	@echo "  make evidence - regenerate denial before/after artifacts + diff"
+	@echo "  make demo-wrong-root - run wrong-root denial demo (tmpdir sandbox)"
+	@echo "  make demos  - run all demos"
 
 
 venv:
@@ -52,6 +55,9 @@ check: fmt lint test
 
 test:
 	.venv/bin/pytest -q
+
+.PHONY: demos
+demos: demo demo-wrong-root
 
 demo:
 	@set -euo pipefail
@@ -93,6 +99,12 @@ demo:
 	grep -c '"event": "decision"' audit.jsonl
 	grep -c '"event": "execution"' audit.jsonl
 
+.PHONY: demo-wrong-root demos
+
+demo-wrong-root:
+	@set -euo pipefail
+	test -f "$(DEMO_WRONG_ROOT)"
+	$(SHELL) "$(DEMO_WRONG_ROOT)"
 
 evidence:
 	@DOCS="$(DOCS)" SANDBOX="$(SANDBOX)" PY="$(PY)" \
@@ -101,10 +113,7 @@ evidence:
 	  DEMO_DIFF="$(DEMO_DIFF)" DEMO_SCOPE="$(DEMO_SCOPE)" \
 	  ./scripts/evidence.sh
 
-
-.PHONY: all
 all: clean test evidence demo
-
 
 clean:
 	@set -euo pipefail
