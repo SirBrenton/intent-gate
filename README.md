@@ -307,3 +307,9 @@ This is a small enforceable refusal boundary: "no irreversible actions without e
 - **Refusal Boundary Checklist for Agentic Systems**
   - [Markdown](docs/REFUSAL_BOUNDARY_CHECKLIST.md)
   - [PDF](docs/REFUSAL_BOUNDARY_CHECKLIST.pdf)
+
+---
+
+## License
+
+MIT © 2026 Brent Williams
